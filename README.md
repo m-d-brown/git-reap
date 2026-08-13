@@ -148,6 +148,19 @@ whose upstream is gone, an idle branch, an active branch, and worktrees that are
 merged, dirty, idle-detached, and freshly detached — with a bare repository next
 door standing in for the remote, so the fetch is real but offline.
 
+The screenshot above is not a mockup, and it is not hand-maintained:
+
+```sh
+scripts/screenshot.sh
+```
+
+builds the binary, builds a demo repository with something of each kind left
+lying around in it (`scripts/demo-repo.sh`), runs the real picker against that
+in a pty, and draws the screen it left behind (`scripts/capture.py`) into
+`docs/screenshot.png`. Commit dates in the demo are relative to today, so the
+ages hold still between runs; the hashes move, because they hash those dates.
+Needs `fzf`, `rsvg-convert`, and `python3` with [pyte](https://pypi.org/project/pyte/).
+
 ## License
 
 MIT
