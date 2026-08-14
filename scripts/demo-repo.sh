@@ -47,6 +47,19 @@ land() {
   git merge -q "$1"
 }
 
+# land_unpushed <branch> <subject> <days-ago>: pushed, carried on locally, then
+# merged into main. Contained in origin/main, so deleting it loses nothing, but
+# ahead of its own remote branch, which is the ref `git branch -d` measures
+# against -- the case that needs -D despite being perfectly safe.
+land_unpushed() {
+  git checkout -q -b "$1"
+  commit "$2" "$(($3 + 2))"
+  git push -q -u origin "$1"
+  commit "$2, second pass" "$3"
+  git checkout -q main
+  git merge -q "$1"
+}
+
 # squash <branch> <subject> <days-ago>: pushed, then deleted on the remote,
 # which is what a squash-merged and closed pull request leaves behind -- the
 # local branch tracks an upstream that is gone, and is not merged.
@@ -74,6 +87,8 @@ git remote set-head origin -a
 land feature/avatar-upload "feat(profile): upload and crop avatars" 12
 land chore/bump-deps "chore: bump axios, vite, and typescript" 5
 land feature/csv-export "feat(reports): export a run as CSV" 9
+
+land_unpushed fix/session-timeout "fix(auth): stop refreshing an expired session" 7
 
 squash fix/login-redirect "fix(auth): keep the redirect target across SSO" 21
 squash feature/rate-limits "feat(api): per-token rate limits" 34

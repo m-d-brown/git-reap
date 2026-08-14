@@ -7,8 +7,10 @@ import (
 )
 
 // branchLine builds one line of `git for-each-ref --format=branchFormat` output.
-func branchLine(name string, committedAt int64, relative, subject, track string) string {
-	return strings.Join([]string{name, strconv.FormatInt(committedAt, 10), relative, subject, track}, field)
+func branchLine(name string, committedAt int64, relative, subject, upstream, track string) string {
+	return strings.Join([]string{
+		name, strconv.FormatInt(committedAt, 10), relative, subject, upstream, track,
+	}, field)
 }
 
 // worktreePorcelain joins blocks the way `git worktree list --porcelain` does.
@@ -18,38 +20,49 @@ func worktreePorcelain(blocks ...string) string {
 
 func TestParseBranches(t *testing.T) {
 	t.Run("all fields", func(t *testing.T) {
-		line := branchLine("wip", 1700000000, "3 days ago", "fix the thing", "[ahead 2]")
-		want := Branch{"wip", 1700000000, "3 days ago", "fix the thing", "[ahead 2]"}
+		line := branchLine("wip", 1700000000, "3 days ago", "fix the thing", "origin/wip", "[ahead 2]")
+		want := Branch{"wip", 1700000000, "3 days ago", "fix the thing", "origin/wip", "[ahead 2]"}
 		if got := parseBranches(line); len(got) != 1 || got[0] != want {
 			t.Errorf("parseBranches(%q) = %+v, want [%+v]", line, got, want)
 		}
 	})
 
-	t.Run("branch without upstream has empty track", func(t *testing.T) {
-		got := parseBranches(branchLine("solo", 100, "1 day ago", "s", ""))
-		if got[0].Track != "" {
-			t.Errorf("Track = %q, want empty", got[0].Track)
+	t.Run("branch without upstream has neither upstream nor track", func(t *testing.T) {
+		got := parseBranches(branchLine("solo", 100, "1 day ago", "s", "", ""))
+		if got[0].Upstream != "" || got[0].Track != "" {
+			t.Errorf("Upstream = %q, Track = %q, want both empty", got[0].Upstream, got[0].Track)
 		}
 	})
 
-	t.Run("track column missing entirely", func(t *testing.T) {
+	t.Run("in sync keeps its upstream and empty track", func(t *testing.T) {
+		// git reports an empty track both for this and for a branch with no
+		// upstream at all, so Upstream is the only thing that tells them apart.
+		got := parseBranches(branchLine("level", 100, "1 day ago", "s", "origin/level", ""))
+		if got[0].Upstream != "origin/level" || got[0].Track != "" {
+			t.Errorf("Upstream = %q, Track = %q", got[0].Upstream, got[0].Track)
+		}
+	})
+
+	t.Run("upstream columns missing entirely", func(t *testing.T) {
 		// gitCapture strips its output, so a listing ending in a branch with no
-		// upstream loses the trailing separator.
+		// upstream loses the trailing separators.
 		line := strings.Join([]string{"last", "100", "1 day ago", "subject"}, field)
-		if got := parseBranches(line); got[0].Track != "" {
-			t.Errorf("Track = %q, want empty", got[0].Track)
+		got := parseBranches(line)
+		if got[0].Upstream != "" || got[0].Track != "" {
+			t.Errorf("Upstream = %q, Track = %q, want both empty", got[0].Upstream, got[0].Track)
 		}
 	})
 
 	t.Run("subject containing spaces and punctuation", func(t *testing.T) {
-		line := branchLine("b", 100, "1 day ago", "feat: add a, b; and c", "")
+		line := branchLine("b", 100, "1 day ago", "feat: add a, b; and c", "", "")
 		if got := parseBranches(line)[0].Subject; got != "feat: add a, b; and c" {
 			t.Errorf("Subject = %q", got)
 		}
 	})
 
 	t.Run("multiple branches", func(t *testing.T) {
-		output := branchLine("a", 100, "now", "s", "[gone]") + "\n" + branchLine("b", 100, "now", "s", "")
+		output := branchLine("a", 100, "now", "s", "origin/a", "[gone]") + "\n" +
+			branchLine("b", 100, "now", "s", "", "")
 		got := parseBranches(output)
 		if len(got) != 2 || got[0].Name != "a" || got[1].Name != "b" {
 			t.Errorf("parseBranches = %+v", got)

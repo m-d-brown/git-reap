@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -10,10 +12,10 @@ const subjectWidth = 50
 
 // classifyBranches picks out the branches that qualify, mapped to why they do.
 //
-// The order matters, because the reason decides the delete flag: gone and
-// unused branches are not merged as far as git is concerned and need -D, while
-// merged uses -d and keeps git's own safety check. A branch that is both merged
-// and idle is reported as merged, the gentler of the two.
+// The order matters, because a branch can qualify several ways over and the
+// reason is what the row reports: an upstream that was deleted says more about
+// why the branch is finished than the merge does, and both say more than the
+// branch merely having gone quiet.
 func classifyBranches(branches []Branch, merged, protected map[string]bool, staleBefore int64) map[string]Reason {
 	candidates := map[string]Reason{}
 	for _, branch := range branches {
@@ -28,6 +30,76 @@ func classifyBranches(branches []Branch, merged, protected map[string]bool, stal
 		}
 	}
 	return candidates
+}
+
+// needsForce reports whether `git branch -d` would refuse this branch, so that
+// -D is what actually deletes it.
+//
+// git's own check asks whether the branch is contained in its upstream -- or in
+// HEAD, when there is no upstream -- and neither of those is the base we
+// measured "merged" against. A branch sitting in origin/main but ahead of its
+// own remote branch fails git's check even though deleting it loses nothing,
+// which is the whole reason this is worked out up front rather than guessed
+// from the reason.
+func needsForce(branch Branch, mergedToHead map[string]bool) bool {
+	switch {
+	case strings.Contains(branch.Track, "gone"):
+		// The upstream git would compare against is not there any more.
+		return true
+	case branch.Upstream == "":
+		return !mergedToHead[branch.Name]
+	default:
+		return unpushed(branch.Track) > 0
+	}
+}
+
+// onlyHere reports that deleting this branch drops commits that exist nowhere
+// else: not in the base, and not on a remote branch either. It is the state
+// worth being loud about, and it is not the state that needs -D -- a merged
+// branch can need forcing and still be perfectly safe to delete.
+func onlyHere(branch Branch, inBase bool) bool {
+	if inBase {
+		return false
+	}
+	return branch.Upstream == "" ||
+		strings.Contains(branch.Track, "gone") ||
+		unpushed(branch.Track) > 0
+}
+
+// trackState is a branch's state column: where its commits live, in plain
+// words, so a row says by itself whether deleting it can lose anything.
+func trackState(branch Branch, inBase bool) string {
+	ahead := unpushed(branch.Track)
+	if onlyHere(branch, inBase) {
+		if ahead > 0 {
+			return strconv.Itoa(ahead) + " only here"
+		}
+		return "only here"
+	}
+	switch {
+	case branch.Upstream == "":
+		return "no upstream"
+	case strings.Contains(branch.Track, "gone"):
+		return "upstream gone"
+	case ahead > 0:
+		// In the base, so these commits are safe; just not on origin/<branch>.
+		return strconv.Itoa(ahead) + " unpushed"
+	default:
+		return "pushed"
+	}
+}
+
+// unpushed is how many commits the branch has that its upstream does not,
+// read out of the text git renders as "[ahead 3, behind 1]".
+func unpushed(track string) int {
+	_, rest, found := strings.Cut(track, "ahead ")
+	if !found {
+		return 0
+	}
+	digits, _, _ := strings.Cut(rest, ",")
+	digits, _, _ = strings.Cut(digits, "]")
+	count, _ := strconv.Atoi(digits)
+	return count
 }
 
 // planWorktrees splits the worktrees into deletion candidates and ones we leave
@@ -55,6 +127,7 @@ func planWorktrees(
 
 		var reason Reason
 		var detail string
+		var risky bool
 		switch {
 		case worktree.Locked:
 			keep(worktree.Path, "locked")
@@ -77,31 +150,42 @@ func planWorktrees(
 				keep(worktree.Path, "detached but recent")
 				continue
 			}
-			reason, detail = Detached, "detached at "+abbreviate(worktree.Head)
+			// Nothing but this worktree points at these commits, so removing it
+			// is what orphans them.
+			reason, detail, risky = Detached, "detached at "+abbreviate(worktree.Head), !state.InBase
 		default:
 			qualifying, ok := candidates[worktree.Branch]
 			if !ok {
 				keep(worktree.Path, worktree.Branch+" still in use")
 				continue
 			}
+			// The branch outlives the worktree unless it is picked too, and its
+			// own row carries whatever risk it has.
 			reason, detail = qualifying, worktree.Branch
 		}
 
+		display := "clean"
+		if risky {
+			display = "only here"
+		}
 		items = append(items, Item{
 			Kind:   WorktreeKind,
 			Key:    worktree.Path,
 			Reason: reason,
 			Age:    state.Relative,
-			State:  "clean",
+			State:  display,
 			Detail: detail,
+			Risky:  risky,
 		})
 	}
 	return items, kept
 }
 
 // branchItems builds the display items for the qualifying branches, in name
-// order.
-func branchItems(branches []Branch, candidates map[string]Reason) []Item {
+// order. merged says which branches are contained in the base, and mergedToHead
+// which are contained in HEAD; between them they settle how a branch is
+// deleted and whether deleting it can lose anything.
+func branchItems(branches []Branch, candidates map[string]Reason, merged, mergedToHead map[string]bool) []Item {
 	byName := make(map[string]Branch, len(branches))
 	for _, branch := range branches {
 		byName[branch.Name] = branch
@@ -115,20 +199,46 @@ func branchItems(branches []Branch, candidates map[string]Reason) []Item {
 	items := make([]Item, 0, len(names))
 	for _, name := range names {
 		branch := byName[name]
-		state := branch.Track
-		if state == "" {
-			state = "no upstream"
-		}
+		inBase := merged[name]
 		items = append(items, Item{
 			Kind:   BranchKind,
 			Key:    name,
 			Reason: candidates[name],
 			Age:    branch.Relative,
-			State:  state,
+			State:  trackState(branch, inBase),
 			Detail: truncate(branch.Subject, subjectWidth),
+			Force:  needsForce(branch, mergedToHead),
+			Risky:  onlyHere(branch, inBase),
 		})
 	}
 	return items
+}
+
+// riskyCount is how many of the items hold commits that are only here.
+func riskyCount(items []Item) int {
+	count := 0
+	for _, item := range items {
+		if item.Risky {
+			count++
+		}
+	}
+	return count
+}
+
+// riskSummary is the one line that every summary of a run shares: the picker's
+// header, the --all confirmation, and the tail of --dry-run. It is empty when
+// nothing on offer holds commits of its own.
+func riskSummary(items []Item, base string) string {
+	count := riskyCount(items)
+	if count == 0 {
+		return ""
+	}
+	rows := "rows are"
+	if count == 1 {
+		rows = "row is"
+	}
+	return fmt.Sprintf("%d %s \"only here\": not in %s and on no remote -- deleting drops those commits",
+		count, rows, base)
 }
 
 // abbreviate shortens a commit sha to the length git itself tends to show.

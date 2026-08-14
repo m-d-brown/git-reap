@@ -157,6 +157,21 @@ func (r *repo) build() {
 	r.commit("active.txt", "")
 	r.git("checkout", "-q", "main")
 
+	// Pushed, carried on locally, then merged into main: contained in
+	// origin/main, so deleting it loses nothing, but ahead of
+	// origin/unpushed-merge, which is the ref `git branch -d` measures against.
+	r.git("checkout", "-qb", "unpushed-merge")
+	r.commit("unpushed-first.txt", "")
+	r.git("push", "-q", "-u", "origin", "unpushed-merge")
+	r.commit("unpushed-second.txt", "")
+	r.git("checkout", "-q", "main")
+	r.git("merge", "-q", "unpushed-merge")
+
+	// Merged into main and never pushed, landing after active branched off, so
+	// it is contained in the base but not in every HEAD you might stand on --
+	// the other way `git branch -d` refuses a branch git-reap has cleared.
+	r.mergeIntoMain("late-merge")
+
 	r.mergeIntoMain("wt-merged")
 	r.git("worktree", "add", "-q", r.path("wt-merged"), "wt-merged")
 
@@ -396,8 +411,8 @@ func TestSelectingAWorktreeAndItsBranchRemovesBoth(t *testing.T) {
 // the work says so by exiting 0 and leaving git's stderr empty.
 func TestPickingBranchesDeletesThem(t *testing.T) {
 	r := newRepo(t)
-	picked := []string{"merged-feature", "gone-feature", "forgotten"}
-	path := r.stubPath("branch:merged-feature*|branch:gone-feature*|branch:forgotten*")
+	picked := []string{"merged-feature", "gone-feature", "forgotten", "unpushed-merge"}
+	path := r.stubPath("branch:merged-feature*|branch:gone-feature*|branch:forgotten*|branch:unpushed-merge*")
 
 	got := r.runWith("", path)
 	if got.code != 0 {
@@ -411,6 +426,101 @@ func TestPickingBranchesDeletesThem(t *testing.T) {
 	}
 	// git refusing a deletion is the one failure that used to pass unnoticed.
 	lacks(t, got.stderr, "not fully merged", "error:")
+}
+
+// TestABranchAheadOfItsUpstreamIsStillDeleted is the reported failure. The
+// branch is contained in origin/main, which is what made it a candidate, but
+// `git branch -d` measures it against origin/unpushed-merge and refuses.
+func TestABranchAheadOfItsUpstreamIsStillDeleted(t *testing.T) {
+	r := newRepo(t)
+	path := r.stubPath("branch:unpushed-merge*")
+
+	got := r.runWith("", path)
+	if got.code != 0 {
+		t.Errorf("exit code = %d, want 0\nstderr:\n%s", got.code, got.stderr)
+	}
+	if set(r.branches()...)["unpushed-merge"] {
+		t.Error("unpushed-merge survived being picked")
+	}
+	lacks(t, got.stderr, "not fully merged", "could not delete")
+}
+
+// TestABranchMergedIntoTheBaseButNotIntoHeadIsStillDeleted is the same refusal
+// reached the other way: with no upstream, git's -d check falls back to HEAD,
+// which is not the base git-reap measured against either.
+func TestABranchMergedIntoTheBaseButNotIntoHeadIsStillDeleted(t *testing.T) {
+	r := newRepo(t)
+	// active branched off before late-merge landed, so standing on it puts
+	// late-merge outside HEAD while origin/main still contains it.
+	r.git("checkout", "-q", "active")
+	path := r.stubPath("branch:late-merge*")
+
+	got := r.runWith("", path)
+	if got.code != 0 {
+		t.Errorf("exit code = %d, want 0\nstderr:\n%s", got.code, got.stderr)
+	}
+	if set(r.branches()...)["late-merge"] {
+		t.Error("late-merge survived being picked")
+	}
+	lacks(t, got.stderr, "not fully merged", "could not delete")
+}
+
+// TestRowsSayWhereTheCommitsLive checks the state column, which is what should
+// have warned that these branches held commits their own remote did not.
+func TestRowsSayWhereTheCommitsLive(t *testing.T) {
+	r := newRepo(t)
+	rows := map[string]string{}
+	for _, line := range strings.Split(r.run("-n").stdout, "\n") {
+		if fields := strings.Fields(line); len(fields) > 2 && fields[0] == "branch" {
+			rows[fields[1]] = line
+		}
+	}
+
+	tests := map[string]string{
+		// In origin/main, but one commit that origin/unpushed-merge lacks.
+		"unpushed-merge": "1 unpushed",
+		// In origin/main, and never had a remote branch of its own to be on.
+		"merged-feature": "no upstream",
+		// In neither: these commits go when the branch does.
+		"gone-feature": "only here",
+		"forgotten":    "only here",
+	}
+	for name, want := range tests {
+		line, ok := rows[name]
+		if !ok {
+			t.Errorf("no row for %s", name)
+			continue
+		}
+		contains(t, line, want)
+	}
+	// A merged branch is never "only here", however far its own remote lags.
+	lacks(t, rows["unpushed-merge"], "only here")
+}
+
+// TestTheRiskSummaryCountsWhatWouldBeLost covers the line the picker header,
+// the --all confirmation, and --dry-run all share.
+func TestTheRiskSummaryCountsWhatWouldBeLost(t *testing.T) {
+	r := newRepo(t)
+
+	got := r.run("-n")
+	contains(t, got.stdout, "only here", "not in origin/main and on no remote")
+
+	// The --all confirmation says the same thing before asking.
+	confirmed := r.runWith("n\n", "", "-a", "--no-fetch")
+	contains(t, confirmed.stdout, "only here", "Delete ")
+}
+
+// TestThePreviewSaysWhetherDeletingLosesAnything covers the pane you are
+// reading while deciding.
+func TestThePreviewSaysWhetherDeletingLosesAnything(t *testing.T) {
+	r := newRepo(t)
+
+	safe := r.run("--preview", "branch:unpushed-merge", "--no-fetch")
+	contains(t, safe.stdout, "in origin/main; deleting drops nothing")
+	lacks(t, safe.stdout, "only here")
+
+	risky := r.run("--preview", "branch:forgotten", "--no-fetch")
+	contains(t, risky.stdout, "only here", "deleting drops 1 commit")
 }
 
 func TestSelectingNothingDeletesNothing(t *testing.T) {

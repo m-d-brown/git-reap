@@ -15,9 +15,11 @@
 // you are standing in is never offered.
 //
 // By default the candidates go through fzf so you can pick: each row carries
-// the age, the tracking state, and the last commit subject, and the preview
-// pane shows the recent history. Without fzf, use --dry-run to look and --all
-// to take everything.
+// the age, where its commits live, and the last commit subject, and the preview
+// pane shows the recent history. A row reading "only here" is one whose commits
+// are in neither the base nor any remote, so deleting it really does drop them;
+// the header, the confirmation, and --dry-run all count those. Without fzf, use
+// --dry-run to look and --all to take everything.
 //
 // Installed as git-reap on PATH, so this also runs as `git reap`.
 package main
@@ -129,7 +131,9 @@ func reap(argv []string) int {
 		return fail(errors.New("not a git repository"))
 	}
 	if opts.preview != "" {
-		fmt.Println(renderPreview(opts.preview))
+		// The picker passes the base along as the positional argument, so the
+		// preview describes a candidate against the same branch the rows do.
+		fmt.Println(renderPreview(opts.preview, findBase(opts.base)))
 		return 0
 	}
 
@@ -157,7 +161,7 @@ func reap(argv []string) int {
 		return fail(err)
 	}
 	worktrees := parseWorktrees(porcelain)
-	states := gatherStates(worktrees)
+	states := gatherStates(worktrees, base)
 
 	mergedOutput, err := gitCapture("branch", "--merged", base, "--format=%(refname:short)")
 	if err != nil {
@@ -166,6 +170,15 @@ func reap(argv []string) int {
 	merged := map[string]bool{}
 	for _, name := range lines(mergedOutput) {
 		merged[name] = true
+	}
+
+	// git branch -d measures a branch with no upstream against HEAD, so this is
+	// what says whether git will accept -d for those. gitTry rather than
+	// gitCapture: an empty set means every such branch is forced, which errs
+	// toward the deletion happening rather than toward it being refused.
+	mergedToHead := map[string]bool{}
+	for _, name := range lines(gitTry("branch", "--merged", "HEAD", "--format=%(refname:short)")) {
+		mergedToHead[name] = true
 	}
 
 	// Never candidates: the base, whatever HEAD is on, and the branch the main
@@ -192,7 +205,7 @@ func reap(argv []string) int {
 	}
 	worktreeItems, kept := planWorktrees(worktrees, states, candidates, root, staleBefore)
 	// Worktrees first: git refuses to delete a branch one has checked out.
-	items := append(worktreeItems, branchItems(branches, candidates)...)
+	items := append(worktreeItems, branchItems(branches, candidates, merged, mergedToHead)...)
 
 	if len(items) == 0 {
 		fmt.Println("git-reap: nothing to reap")
@@ -200,6 +213,7 @@ func reap(argv []string) int {
 	}
 
 	rows := formatRows(items, root)
+	risk := riskSummary(items, base)
 	if opts.dryRun {
 		// Only the display half; the token exists for fzf, not for reading.
 		for _, row := range rows {
@@ -207,6 +221,9 @@ func reap(argv []string) int {
 		}
 		for _, keep := range kept {
 			fmt.Printf("kept    worktree %s (%s)\n", keep.Path, keep.Reason)
+		}
+		if risk != "" {
+			fmt.Println(risk)
 		}
 		return 0
 	}
@@ -220,7 +237,10 @@ func reap(argv []string) int {
 			for _, row := range rows {
 				fmt.Println(display(row))
 			}
-			if !confirm(len(items)) {
+			if risk != "" {
+				fmt.Println(risk)
+			}
+			if !confirm(len(items), riskyCount(items)) {
 				fmt.Println("git-reap: cancelled")
 				return 0
 			}
@@ -235,7 +255,11 @@ func reap(argv []string) int {
 		if err != nil {
 			return fail(err)
 		}
-		picked, ok := selectWithFzf(rows, fzf, quote(self)+" --preview")
+		// fzf substitutes the row's token for {1}; the base follows it, because
+		// the preview cannot work out on its own which one this run measured
+		// against.
+		preview := quote(self) + " --preview {1} " + quote(base)
+		picked, ok := selectWithFzf(rows, fzf, preview, keys)
 		if !ok || len(picked) == 0 {
 			fmt.Println("git-reap: nothing selected")
 			return 0
@@ -245,12 +269,18 @@ func reap(argv []string) int {
 		}
 	}
 
-	execute(items, selected, worktrees)
+	if failed := execute(items, selected, worktrees); failed > 0 {
+		return 1
+	}
 	return 0
 }
 
-func confirm(count int) bool {
-	fmt.Printf("Delete %d item(s)? [y/N] ", count)
+func confirm(count, risky int) bool {
+	if risky > 0 {
+		fmt.Printf("Delete %d item(s), %d of them only here? [y/N] ", count, risky)
+	} else {
+		fmt.Printf("Delete %d item(s)? [y/N] ", count)
+	}
 	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && answer == "" {
 		return false

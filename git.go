@@ -41,6 +41,13 @@ func gitRun(args ...string) bool {
 	return command.Run() == nil
 }
 
+// gitSucceeds runs git with args for its exit status alone, which is how the
+// plumbing commands that answer yes-or-no questions report themselves.
+func gitSucceeds(args ...string) bool {
+	_, err := gitCapture(args...)
+	return err == nil
+}
+
 // findBase works out which branch to measure "merged" against.
 //
 // origin/HEAD records the remote's default branch, when the clone bothered to
@@ -62,8 +69,8 @@ func findBase(explicit string) string {
 }
 
 // gatherStates looks at each worktree on disk: does it exist, is it dirty, how
-// old is its last commit.
-func gatherStates(worktrees []Worktree) map[string]State {
+// old is its last commit, and is its HEAD already in base.
+func gatherStates(worktrees []Worktree, base string) map[string]State {
 	states := make(map[string]State, len(worktrees))
 	for _, worktree := range worktrees {
 		if info, err := os.Stat(worktree.Path); err != nil || !info.IsDir() {
@@ -81,6 +88,7 @@ func gatherStates(worktrees []Worktree) map[string]State {
 			Dirty:       gitTry("-C", worktree.Path, "status", "--porcelain") != "",
 			CommittedAt: committedAt,
 			Relative:    relative,
+			InBase:      gitSucceeds("merge-base", "--is-ancestor", worktree.Head, base),
 		}
 	}
 	return states
@@ -97,7 +105,10 @@ func worktreeHolding(branch string) string {
 }
 
 // execute removes the selected worktrees, then deletes the selected branches.
-func execute(items []Item, selected map[string]bool, worktrees []Worktree) {
+// It returns how many of them git refused, so that a run which did not do what
+// it was asked does not look like one that did.
+func execute(items []Item, selected map[string]bool, worktrees []Worktree) int {
+	failed := 0
 	holder := map[string]string{}
 	for _, worktree := range worktrees {
 		if worktree.Branch != "" {
@@ -113,6 +124,9 @@ func execute(items []Item, selected map[string]bool, worktrees []Worktree) {
 		if gitRun("worktree", "remove", item.Key) {
 			removed[item.Key] = true
 			fmt.Println("removed worktree " + item.Key)
+		} else {
+			fmt.Fprintf(os.Stderr, "git-reap: could not remove worktree %s\n", item.Key)
+			failed++
 		}
 	}
 
@@ -124,12 +138,17 @@ func execute(items []Item, selected map[string]bool, worktrees []Worktree) {
 			fmt.Printf("kept branch %s (checked out at %s)\n", item.Key, heldBy)
 			continue
 		}
-		// A squash-merged or simply idle branch is not merged as far as git is
-		// concerned, so -d would refuse it. -d elsewhere keeps git's check.
-		flag := "-D"
-		if item.Reason == Merged {
-			flag = "-d"
+		// Item.Force already worked out whether git's own -d check would refuse
+		// this branch; it asks about the upstream, not about the base we
+		// measured "merged" against.
+		flag := "-d"
+		if item.Force {
+			flag = "-D"
 		}
-		gitRun("branch", flag, item.Key)
+		if !gitRun("branch", flag, item.Key) {
+			fmt.Fprintf(os.Stderr, "git-reap: could not delete branch %s\n", item.Key)
+			failed++
+		}
 	}
+	return failed
 }

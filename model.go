@@ -19,8 +19,12 @@ var branchFormat = strings.Join([]string{
 	"%(committerdate:unix)",
 	"%(committerdate:relative)",
 	"%(subject)",
+	"%(upstream:short)",
 	"%(upstream:track)",
 }, field)
+
+// branchColumns is how many fields branchFormat produces.
+const branchColumns = 6
 
 // Reason says why something qualifies for deletion.
 type Reason string
@@ -46,8 +50,12 @@ type Branch struct {
 	CommittedAt int64
 	Relative    string
 	Subject     string
+	// Upstream is the remote-tracking branch, "origin/x", or "" when the branch
+	// has none. Track is empty in both of those cases, so this is the only
+	// thing that tells "in sync" apart from "never had an upstream".
+	Upstream string
 	// Track is the upstream-tracking text: "[gone]", "[ahead 2]", or "" when
-	// the branch has no upstream.
+	// the branch has no upstream or is level with it.
 	Track string
 }
 
@@ -68,6 +76,10 @@ type State struct {
 	Dirty       bool
 	CommittedAt int64
 	Relative    string
+	// InBase says whether the worktree's HEAD is contained in the base branch.
+	// A detached worktree whose HEAD is not carries commits that removing it
+	// would orphan.
+	InBase bool
 }
 
 // Item is one deletion candidate, ready to display, select, and act on.
@@ -79,6 +91,14 @@ type Item struct {
 	Age    string
 	State  string
 	Detail string
+	// Force says that `git branch -d` would refuse this branch, so -D is what
+	// actually deletes it. Worked out from what git itself checks, not from
+	// Reason -- see needsForce.
+	Force bool
+	// Risky says the commits here are in neither the base nor any remote, so
+	// deleting really does drop them. Merged branches are never risky, however
+	// much their own remote branch has fallen behind.
+	Risky bool
 }
 
 // Token is the stable id round-tripped through fzf and --preview.
@@ -94,10 +114,10 @@ type Kept struct {
 func parseBranches(output string) []Branch {
 	var branches []Branch
 	for _, line := range lines(output) {
-		columns := strings.SplitN(line, field, 5)
-		// The tracking column is missing rather than empty on the last line,
-		// whose trailing separator gitCapture has stripped.
-		for len(columns) < 5 {
+		columns := strings.SplitN(line, field, branchColumns)
+		// The upstream columns are missing rather than empty on the last line,
+		// whose trailing separators gitCapture has stripped.
+		for len(columns) < branchColumns {
 			columns = append(columns, "")
 		}
 		committedAt, _ := strconv.ParseInt(columns[1], 10, 64)
@@ -106,7 +126,8 @@ func parseBranches(output string) []Branch {
 			CommittedAt: committedAt,
 			Relative:    columns[2],
 			Subject:     columns[3],
-			Track:       columns[4],
+			Upstream:    columns[4],
+			Track:       columns[5],
 		})
 	}
 	return branches

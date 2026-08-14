@@ -24,13 +24,14 @@ bash scripts/demo-repo.sh "$WORKSPACE/demo"
 
 # fzf takes its keystrokes from the tty, and driving that on a timer is a race,
 # so the picker is posed with a binding instead: mark the two idle agent
-# worktrees, walk up to fix/login-redirect, and mark that too, leaving the
-# cursor on it so the preview pane has a branch to show. `up` rather than
-# `down`, because fzf's default layout draws the first row at the bottom, and
-# `load` rather than `start`, because start fires before the rows have arrived
-# and there is nothing yet to move through. The list, the columns, and the
-# preview are all the real thing.
-export FZF_DEFAULT_OPTS='--bind load:toggle+up+toggle+up+up+up+up+up+up+toggle'
+# worktrees, walk up to fix/session-timeout, and mark that too, leaving the
+# cursor on it so the preview pane has a branch to show -- the one that is in
+# origin/main but ahead of its own remote branch, which is the row worth
+# explaining. `up` rather than `down`, because fzf's default layout draws the
+# first row at the bottom, and `load` rather than `start`, because start fires
+# before the rows have arrived and there is nothing yet to move through. The
+# list, the columns, and the preview are all the real thing.
+export FZF_DEFAULT_OPTS='--bind load:toggle+up+toggle+up+up+up+up+up+up+up+toggle'
 
 python3 scripts/capture.py "$WORKSPACE/screenshot.svg" "$WORKSPACE/demo/checkout-service" \
   "$WORKSPACE/git-reap"

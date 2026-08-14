@@ -22,6 +22,10 @@ found, and deletes only what you pick using `fzf`.
 - **You pick.** Candidates go through [fzf](https://github.com/junegunn/fzf)
   with each one's recent history in the preview pane. Nothing is deleted that
   you did not mark.
+- **It says what you would lose.** Every row says where its commits live, and
+  the ones that are `only here` — in neither the base nor any remote — say so in
+  red in the preview pane, with the number of commits at stake. `--dry-run` and
+  the confirmation count them before you agree to anything.
 - **It says what it skipped.** `--dry-run` lists the candidates *and* the
   worktrees it left alone, with the reason for each.
 - **Nothing to configure.** No config file, no state, no remote API, no token.
@@ -38,6 +42,23 @@ found, and deletes only what you pick using `fzf`.
 
 Worktrees are removed before branches, because git refuses to delete a branch
 that a worktree has checked out.
+
+Every row also says where its commits live, which is the part worth reading
+before you mark anything:
+
+| State           | What it means                                                                      |
+| --------------- | ---------------------------------------------------------------------------------- |
+| `pushed`        | the remote branch has everything this one does                                     |
+| `N unpushed`    | N commits are not on the remote branch — the reason column says where they are     |
+| `no upstream`   | the branch never had a remote branch of its own                                    |
+| `upstream gone` | the remote branch was deleted                                                      |
+| `only here`     | in neither the base nor any remote: deleting really does drop these commits        |
+
+`only here` is the one to look at. Everything else is recoverable from somewhere
+that is not your reflog, so the preview pane spells out in red how many commits
+an `only here` row would take with it, and `--dry-run` and the `--all`
+confirmation count those rows before anything happens. Set `NO_COLOR` to keep
+the red out of it.
 
 **Never touched:** the base branch, the branch you are on, the branch the main
 worktree holds, the main worktree itself, any worktree that is locked, has
@@ -100,11 +121,25 @@ git reap develop        # measure "merged" against develop
 information is:
 
 ```
-worktree  worktrees/csv-export            merged    9 days ago    clean        feature/csv-export
-worktree  .claude/worktrees/agent-7f21e0  detached  6 months ago  clean        detached at 1baafd65
-branch    chore/bump-deps                 merged    5 days ago    no upstream  chore: bump axios, vite, and typescript
+worktree  .claude/worktrees/agent-7f21e0  detached       6 months ago  only here    detached at 1baafd65
+worktree  .claude/worktrees/agent-b3c94d  detached       5 months ago  only here    detached at 71161480
+worktree  worktrees/csv-export            merged         9 days ago    clean        feature/csv-export
+branch    chore/bump-deps                 merged         5 days ago    no upstream  chore: bump axios, vite, and typescript
+branch    feature/avatar-upload           merged         12 days ago   no upstream  feat(profile): upload and crop avatars
+branch    feature/csv-export              merged         9 days ago    no upstream  feat(reports): export a run as CSV
+branch    feature/rate-limits             upstream gone  5 weeks ago   only here    feat(api): per-token rate limits
+branch    fix/login-redirect              upstream gone  3 weeks ago   only here    fix(auth): keep the redirect target across SSO
+branch    fix/session-timeout             merged         7 days ago    1 unpushed   fix(auth): stop refreshing an expired session, se…
+branch    spike/graphql-gateway           unused         6 months ago  only here    spike: sketch a graphql gateway in front of the R…
+branch    wip/flaky-scheduler-test        unused         5 months ago  only here    wip: try to reproduce the flaky scheduler test
 kept    worktree /src/checkout-service/.claude/worktrees/agent-e5a018 (detached but recent)
+6 rows are "only here": not in origin/main and on no remote -- deleting drops those commits
 ```
+
+`fix/session-timeout` is the row worth looking twice at: it is in `origin/main`,
+so nothing is lost by deleting it, but one commit never reached
+`origin/fix-session-timeout` — which is the ref `git branch -d` measures it
+against, and the reason it needs `-D`.
 
 ## How it decides
 
@@ -117,10 +152,19 @@ your clone never recorded one, `git remote set-head origin -a` fixes that;
 failing that, `git reap` tries `origin/main`, `origin/master`, `main`, and
 `master`, and you can always name a base yourself.
 
-A branch reported as `merged` is deleted with `git branch -d`, so git gets the
-last word. `upstream gone` and `unused` branches are not merged as far as git is
-concerned, so those need `-D`. That is why a branch that is both merged and idle
-is reported as merged: it is the gentler of the two.
+Branches go out with `git branch -d` wherever git will accept it, so git keeps
+the last word, and with `-D` where it would not. Which one that is cannot be
+read off the reason, because `-d` asks a different question than `git reap`
+does: it wants the branch contained in **its upstream** — or in `HEAD`, when it
+has no upstream — while `merged` here means contained in **the base**. A branch
+sitting safely in `origin/main` but one commit ahead of `origin/my-branch`
+fails git's check and passes this one, so `git reap` works out up front which
+branches those are and forces exactly them.
+
+That is a question about refs, not about safety. The safety question is the
+`only here` column above, and the two do not line up: a `merged` branch can
+need `-D` and still cost you nothing, while an `unused` branch that git is
+perfectly willing to `-D` may be the only place its commits exist.
 
 ## Compared to other tools
 

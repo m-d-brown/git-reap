@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +16,11 @@ func set(names ...string) map[string]bool {
 
 func TestClassifyBranches(t *testing.T) {
 	branch := func(name string, committedAt int64, track string) Branch {
-		return Branch{name, committedAt, "1 day ago", "s", track}
+		upstream := ""
+		if track != "" {
+			upstream = "origin/" + name
+		}
+		return Branch{name, committedAt, "1 day ago", "s", upstream, track}
 	}
 	const staleBefore = 50
 
@@ -47,14 +52,13 @@ func TestClassifyBranches(t *testing.T) {
 			want:     map[string]Reason{},
 		},
 		{
-			// The reason picks the delete flag, and a gone branch needs -D.
+			// A deleted upstream says more about why the branch is finished.
 			name:     "gone wins over merged and unused",
 			branches: []Branch{branch("squashed", 10, "[gone]")},
 			merged:   set("squashed"),
 			want:     map[string]Reason{"squashed": Gone},
 		},
 		{
-			// Merged is the gentler reason: it deletes with -d rather than -D.
 			name:     "merged wins over unused",
 			branches: []Branch{branch("old", 10, "")},
 			merged:   set("old"),
@@ -86,8 +90,10 @@ func TestClassifyBranches(t *testing.T) {
 
 func TestPlanWorktrees(t *testing.T) {
 	mainWorktree := Worktree{"/repo", "aaa", "main", false}
+	// InBase: the ordinary case, where the worktree's commits are in the base
+	// already. The tests that care about the other case say so.
 	state := func(exists, dirty bool, committedAt int64) State {
-		return State{exists, dirty, committedAt, "1 day ago"}
+		return State{exists, dirty, committedAt, "1 day ago", true}
 	}
 	const staleBefore = 50
 
@@ -115,12 +121,26 @@ func TestPlanWorktrees(t *testing.T) {
 			map[string]Reason{"done": Merged},
 			"/repo",
 		)
-		want := Item{WorktreeKind, "/wt", Merged, "1 day ago", "clean", "done"}
+		want := Item{WorktreeKind, "/wt", Merged, "1 day ago", "clean", "done", false, false}
 		if len(items) != 1 || items[0] != want {
 			t.Fatalf("items = %+v, want [%+v]", items, want)
 		}
 		if len(kept) != 0 {
 			t.Errorf("kept = %+v, want nothing", kept)
+		}
+	})
+
+	t.Run("a worktree on a branch is never risky itself", func(t *testing.T) {
+		// The branch outlives the worktree unless it is picked too, and its own
+		// row carries whatever risk it has.
+		items, _ := plan(
+			Worktree{"/wt", "bbb", "done", false},
+			State{true, false, 100, "1 day ago", false},
+			map[string]Reason{"done": Merged},
+			"/repo",
+		)
+		if items[0].Risky || items[0].State != "clean" {
+			t.Errorf("items[0] = %+v, want not risky", items[0])
 		}
 	})
 
@@ -140,6 +160,23 @@ func TestPlanWorktrees(t *testing.T) {
 		items, _ := plan(Worktree{"/wt", "0123456789abcdef", "", false}, state(true, false, 10), nil, "/repo")
 		if len(items) != 1 || items[0].Reason != Detached || items[0].Detail != "detached at 01234567" {
 			t.Errorf("items = %+v", items)
+		}
+		if items[0].Risky || items[0].State != "clean" {
+			t.Errorf("items[0] = %+v, want not risky when the HEAD is in the base", items[0])
+		}
+	})
+
+	t.Run("detached worktree outside the base is risky", func(t *testing.T) {
+		// Nothing but the worktree points at these commits, so removing it is
+		// what orphans them.
+		items, _ := plan(
+			Worktree{"/wt", "0123456789abcdef", "", false},
+			State{true, false, 10, "1 day ago", false},
+			nil,
+			"/repo",
+		)
+		if len(items) != 1 || !items[0].Risky || items[0].State != "only here" {
+			t.Errorf("items = %+v, want a risky item", items)
 		}
 	})
 
@@ -224,13 +261,13 @@ func TestPlanWorktrees(t *testing.T) {
 func TestBranchItems(t *testing.T) {
 	t.Run("items are in name order with metadata", func(t *testing.T) {
 		branches := []Branch{
-			{"zeta", 100, "2 days ago", "later work", "[gone]"},
-			{"alpha", 100, "3 weeks ago", "early work", ""},
+			{"zeta", 100, "2 days ago", "later work", "origin/zeta", "[gone]"},
+			{"alpha", 100, "3 weeks ago", "early work", "", ""},
 		}
-		items := branchItems(branches, map[string]Reason{"zeta": Gone, "alpha": Merged})
+		items := branchItems(branches, map[string]Reason{"zeta": Gone, "alpha": Merged}, set("alpha"), set("alpha"))
 		want := []Item{
-			{BranchKind, "alpha", Merged, "3 weeks ago", "no upstream", "early work"},
-			{BranchKind, "zeta", Gone, "2 days ago", "[gone]", "later work"},
+			{BranchKind, "alpha", Merged, "3 weeks ago", "no upstream", "early work", false, false},
+			{BranchKind, "zeta", Gone, "2 days ago", "only here", "later work", true, true},
 		}
 		if !reflect.DeepEqual(items, want) {
 			t.Errorf("branchItems = %+v, want %+v", items, want)
@@ -242,9 +279,154 @@ func TestBranchItems(t *testing.T) {
 		for range 200 {
 			subject += "x"
 		}
-		item := branchItems([]Branch{{"b", 100, "now", subject, ""}}, map[string]Reason{"b": Merged})[0]
+		branches := []Branch{{"b", 100, "now", subject, "", ""}}
+		item := branchItems(branches, map[string]Reason{"b": Merged}, set("b"), set("b"))[0]
 		if runes := []rune(item.Detail); len(runes) != subjectWidth || runes[len(runes)-1] != '…' {
 			t.Errorf("Detail = %q", item.Detail)
+		}
+	})
+}
+
+// TestNeedsForce covers the bug this whole distinction exists for: `git branch
+// -d` measures a branch against its upstream, or against HEAD when it has none,
+// and neither of those is the base that decided the branch was merged.
+func TestNeedsForce(t *testing.T) {
+	tests := []struct {
+		name         string
+		branch       Branch
+		mergedToHead map[string]bool
+		want         bool
+	}{
+		{
+			// The reported failure: merged into origin/main, but carrying
+			// commits origin/restyle has never seen, so -d refuses it.
+			name:         "ahead of its upstream",
+			branch:       Branch{Name: "restyle", Upstream: "origin/restyle", Track: "[ahead 1, behind 9]"},
+			mergedToHead: set("restyle"),
+			want:         true,
+		},
+		{
+			name:   "level with its upstream",
+			branch: Branch{Name: "done", Upstream: "origin/done"},
+			want:   false,
+		},
+		{
+			name:   "behind its upstream only",
+			branch: Branch{Name: "done", Upstream: "origin/done", Track: "[behind 9]"},
+			want:   false,
+		},
+		{
+			// git has no upstream left to compare against.
+			name:   "upstream gone",
+			branch: Branch{Name: "squashed", Upstream: "origin/squashed", Track: "[gone]"},
+			want:   true,
+		},
+		{
+			name:         "no upstream, merged into HEAD",
+			branch:       Branch{Name: "local"},
+			mergedToHead: set("local"),
+			want:         false,
+		},
+		{
+			// Merged into the base, but you are standing somewhere else: the
+			// same failure, reached the other way.
+			name:         "no upstream, not merged into HEAD",
+			branch:       Branch{Name: "local"},
+			mergedToHead: set("something-else"),
+			want:         true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := needsForce(test.branch, test.mergedToHead); got != test.want {
+				t.Errorf("needsForce = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// TestTrackState covers the state column, which is what should have warned that
+// these branches held commits their own remote did not.
+func TestTrackState(t *testing.T) {
+	tests := []struct {
+		name     string
+		upstream string
+		track    string
+		inBase   bool
+		want     string
+		risky    bool
+	}{
+		{name: "no upstream but merged", inBase: true, want: "no upstream"},
+		{name: "level with upstream", upstream: "origin/b", inBase: true, want: "pushed"},
+		{name: "behind only", upstream: "origin/b", track: "[behind 9]", inBase: true, want: "pushed"},
+		{name: "behind only, not in base", upstream: "origin/b", track: "[behind 9]", want: "pushed"},
+		{
+			name: "upstream gone but merged", upstream: "origin/b", track: "[gone]",
+			inBase: true, want: "upstream gone",
+		},
+		{
+			// The reported case: safe, because the commits are in the base.
+			name: "ahead but merged", upstream: "origin/b", track: "[ahead 1, behind 9]",
+			inBase: true, want: "1 unpushed",
+		},
+		{name: "no upstream and not merged", want: "only here", risky: true},
+		{name: "upstream gone and not merged", upstream: "origin/b", track: "[gone]", want: "only here", risky: true},
+		{
+			name: "ahead and not merged", upstream: "origin/b", track: "[ahead 3]",
+			want: "3 only here", risky: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			branch := Branch{Name: "b", Upstream: test.upstream, Track: test.track}
+			if got := trackState(branch, test.inBase); got != test.want {
+				t.Errorf("trackState = %q, want %q", got, test.want)
+			}
+			if got := onlyHere(branch, test.inBase); got != test.risky {
+				t.Errorf("onlyHere = %v, want %v", got, test.risky)
+			}
+		})
+	}
+}
+
+func TestUnpushed(t *testing.T) {
+	tests := map[string]int{
+		"":                    0,
+		"[gone]":              0,
+		"[behind 9]":          0,
+		"[ahead 3]":           3,
+		"[ahead 1, behind 9]": 1,
+		"[ahead 12]":          12,
+	}
+	for track, want := range tests {
+		if got := unpushed(track); got != want {
+			t.Errorf("unpushed(%q) = %d, want %d", track, got, want)
+		}
+	}
+}
+
+func TestRiskSummary(t *testing.T) {
+	risky := Item{Kind: BranchKind, Key: "a", Risky: true}
+	safe := Item{Kind: BranchKind, Key: "b"}
+
+	t.Run("nothing risky says nothing", func(t *testing.T) {
+		if got := riskSummary([]Item{safe, safe}, "origin/main"); got != "" {
+			t.Errorf("riskSummary = %q, want empty", got)
+		}
+	})
+
+	t.Run("counts only the risky rows, and names the base", func(t *testing.T) {
+		got := riskSummary([]Item{risky, safe, risky}, "origin/main")
+		if !strings.HasPrefix(got, "2 rows are") || !strings.Contains(got, "origin/main") {
+			t.Errorf("riskSummary = %q", got)
+		}
+	})
+
+	t.Run("one row reads as one row", func(t *testing.T) {
+		if got := riskSummary([]Item{risky, safe}, "main"); !strings.HasPrefix(got, "1 row is") {
+			t.Errorf("riskSummary = %q", got)
 		}
 	})
 }
