@@ -391,6 +391,28 @@ func TestSelectingAWorktreeAndItsBranchRemovesBoth(t *testing.T) {
 	}
 }
 
+// TestPickingBranchesDeletesThem covers the interactive path for branches on
+// their own -- one of each reason, marked and gone -- and that a run which did
+// the work says so by exiting 0 and leaving git's stderr empty.
+func TestPickingBranchesDeletesThem(t *testing.T) {
+	r := newRepo(t)
+	picked := []string{"merged-feature", "gone-feature", "forgotten"}
+	path := r.stubPath("branch:merged-feature*|branch:gone-feature*|branch:forgotten*")
+
+	got := r.runWith("", path)
+	if got.code != 0 {
+		t.Errorf("exit code = %d, want 0\nstderr:\n%s", got.code, got.stderr)
+	}
+	surviving := set(r.branches()...)
+	for _, name := range picked {
+		if surviving[name] {
+			t.Errorf("%s survived being picked", name)
+		}
+	}
+	// git refusing a deletion is the one failure that used to pass unnoticed.
+	lacks(t, got.stderr, "not fully merged", "error:")
+}
+
 func TestSelectingNothingDeletesNothing(t *testing.T) {
 	r := newRepo(t)
 	branchesBefore := r.branches()
