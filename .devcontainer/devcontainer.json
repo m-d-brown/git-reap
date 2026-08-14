@@ -1,0 +1,41 @@
+// A container that can redraw docs/screenshot.png.
+//
+// The screenshot is generated, not hand-made: scripts/screenshot.sh builds a
+// demo repository, runs the real picker against it in a pty, and draws the
+// screen it left. That needs fzf, rsvg-convert, python3 with pyte, and a
+// monospace font -- a pile of things to install on a laptop for one command,
+// and a pile of things that make the image drift when their versions do. Here
+// they are fixed, so two runs a year apart produce the same picture.
+//
+// Open the repo in VS Code (or any Dev Containers-compatible editor), then:
+//
+//     scripts/screenshot.sh
+{
+  "name": "git-reap",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "vscode",
+
+  "postCreateCommand": "./.devcontainer/post-create.sh",
+  // Don't attach the editor until the toolchain exists, so the Go extension
+  // doesn't start against a half-provisioned container.
+  "waitFor": "postCreateCommand",
+
+  // Claude Code's login and history are the one piece of container state worth
+  // keeping; everything else is rebuilt from go.mod and the Dockerfile.
+  "mounts": ["source=git-reap-claude,target=/home/vscode/.claude,type=volume"],
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "timonwong.shellcheck",
+        "DavidAnson.vscode-markdownlint",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "[go]": { "editor.defaultFormatter": "golang.go" }
+      }
+    }
+  }
+}

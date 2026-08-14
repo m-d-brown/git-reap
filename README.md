@@ -161,6 +161,12 @@ in a pty, and draws the screen it left behind (`scripts/capture.py`) into
 ages hold still between runs; the hashes move, because they hash those dates.
 Needs `fzf`, `rsvg-convert`, and `python3` with [pyte](https://pypi.org/project/pyte/).
 
+Rather than installing those, open the repository in a Dev Containers-capable
+editor and let `.devcontainer/` supply them. It pins them to what Debian
+stable ships, so the picture does not drift when `fzf` cuts a release, and it
+installs a monospace font for `rsvg-convert` to draw with — without one the
+text falls back to a proportional face and the columns wander.
+
 ## License
 
 MIT
