@@ -31,6 +31,8 @@ found, and deletes only what you pick using `fzf`.
 - **Nothing to configure.** No config file, no state, no remote API, no token.
   One binary, and `git` and `fzf` on your `PATH`.
 
+![the preview pane in red, warning that spike/graphql-gateway's one commit exists nowhere else](docs/screenshot-warning.png)
+
 ## What qualifies for deletion
 
 | Reason          | What it means                                                                           |
@@ -192,18 +194,19 @@ whose upstream is gone, an idle branch, an active branch, and worktrees that are
 merged, dirty, idle-detached, and freshly detached — with a bare repository next
 door standing in for the remote, so the fetch is real but offline.
 
-The screenshot above is not a mockup, and it is not hand-maintained:
+The screenshots above are not mockups, and they are not hand-maintained:
 
 ```sh
 scripts/screenshot.sh
 ```
 
 builds the binary, builds a demo repository with something of each kind left
-lying around in it (`scripts/demo-repo.sh`), runs the real picker against that
-in a pty, and draws the screen it left behind (`scripts/capture.py`) into
-`docs/screenshot.png`. Commit dates in the demo are relative to today, so the
-ages hold still between runs; the hashes move, because they hash those dates.
-Needs `fzf`, `rsvg-convert`, and `python3` with [pyte](https://pypi.org/project/pyte/).
+lying around in it (`scripts/demo-repo.sh`), and runs the real picker against
+that in a pty twice, drawing each screen it left behind (`scripts/capture.py`)
+into `docs/screenshot.png` and `docs/screenshot-warning.png`. Commit dates in
+the demo are relative to today, so the ages hold still between runs; the
+hashes move, because they hash those dates. Needs `fzf`, `rsvg-convert`, and
+`python3` with [pyte](https://pypi.org/project/pyte/).
 
 Rather than installing those, open the repository in a Dev Containers-capable
 editor and let `.devcontainer/` supply them. It pins them to what Debian
