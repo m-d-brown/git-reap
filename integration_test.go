@@ -576,6 +576,40 @@ func TestNothingToDoIsReported(t *testing.T) {
 	contains(t, r.run("-a", "-y", "--no-fetch").stdout, "nothing to reap")
 }
 
+func TestDebugExplainsEveryDecisionAndChangesNothing(t *testing.T) {
+	r := newRepo(t)
+	branchesBefore, worktreesBefore := r.branches(), r.worktrees()
+
+	got := r.run("--debug")
+	contains(t, got.stdout,
+		// How the base resolved, which is the surprise behind most empty runs.
+		"origin/HEAD",
+		// Each way a branch can qualify, and each way it can fail to.
+		"offered (merged)", "offered (upstream gone)", "offered (unused)",
+		"protected: the base",
+		"not merged, upstream not gone",
+		// The worktree state behind a decision, rather than just the decision.
+		"kept: uncommitted changes")
+
+	if !equal(r.branches(), branchesBefore) || !equal(r.worktrees(), worktreesBefore) {
+		t.Errorf("--debug changed the repository: %v %v", r.branches(), r.worktrees())
+	}
+}
+
+// The report comes before the "nothing to reap" exit, because a run that offers
+// nothing when you expected something is what --debug is mostly asked about.
+func TestDebugReportsEvenWhenThereIsNothingToReap(t *testing.T) {
+	r := newRepo(t)
+	if err := os.Remove(filepath.Join(r.path("wt-dirty"), "scratch.txt")); err != nil {
+		t.Fatal(err)
+	}
+	r.run("-a", "-y")
+
+	got := r.run("--debug", "--no-fetch")
+	contains(t, got.stdout, "nothing -- every branch and worktree above says why", "protected: the base")
+	lacks(t, got.stdout, "nothing to reap")
+}
+
 func TestRunningOutsideARepositoryFails(t *testing.T) {
 	r := newRepo(t)
 

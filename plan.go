@@ -10,23 +10,41 @@ import (
 // subjectWidth is how much of a commit subject a branch row shows.
 const subjectWidth = 50
 
-// classifyBranches picks out the branches that qualify, mapped to why they do.
+// classify decides whether one branch qualifies for deletion, and says why not
+// when it does not. Exactly one of the results is set: a Reason when the branch
+// is a candidate, an explanation when it is passed over.
 //
 // The order matters, because a branch can qualify several ways over and the
 // reason is what the row reports: an upstream that was deleted says more about
 // why the branch is finished than the merge does, and both say more than the
 // branch merely having gone quiet.
-func classifyBranches(branches []Branch, merged, protected map[string]bool, staleBefore int64) map[string]Reason {
+//
+// The explanation is the half --debug prints. It comes from here, rather than
+// from a second pass that re-derives it, so that what --debug says about a
+// branch cannot drift from what actually happened to it. protected maps a
+// branch name to the reason it is untouchable, which is why it is not a plain
+// set: "why is main never offered" deserves an answer.
+func classify(branch Branch, merged map[string]bool, protected map[string]string, staleBefore int64) (Reason, string) {
+	switch {
+	case protected[branch.Name] != "":
+		return "", "protected: " + protected[branch.Name]
+	case strings.Contains(branch.Track, "gone"):
+		return Gone, ""
+	case merged[branch.Name]:
+		return Merged, ""
+	case branch.CommittedAt < staleBefore:
+		return Unused, ""
+	default:
+		return "", "not merged, upstream not gone, last commit " + branch.Relative
+	}
+}
+
+// classifyBranches picks out the branches that qualify, mapped to why they do.
+func classifyBranches(branches []Branch, merged map[string]bool, protected map[string]string, staleBefore int64) map[string]Reason {
 	candidates := map[string]Reason{}
 	for _, branch := range branches {
-		switch {
-		case protected[branch.Name]:
-		case strings.Contains(branch.Track, "gone"):
-			candidates[branch.Name] = Gone
-		case merged[branch.Name]:
-			candidates[branch.Name] = Merged
-		case branch.CommittedAt < staleBefore:
-			candidates[branch.Name] = Unused
+		if reason, _ := classify(branch, merged, protected, staleBefore); reason != "" {
+			candidates[branch.Name] = reason
 		}
 	}
 	return candidates

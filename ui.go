@@ -17,10 +17,8 @@ func formatRows(items []Item, root string) []string {
 	widths := make([]int, 5)
 	for i, item := range items {
 		key := item.Key
-		if item.Kind == WorktreeKind && root != "" && strings.HasPrefix(key, root+string(filepath.Separator)) {
-			if relative, err := filepath.Rel(root, key); err == nil {
-				key = relative
-			}
+		if item.Kind == WorktreeKind {
+			key = relativePath(key, root)
 		}
 		columns[i] = []string{string(item.Kind), key, string(item.Reason), item.Age, item.State, item.Detail}
 		for c, text := range columns[i][:5] {
@@ -38,6 +36,30 @@ func formatRows(items []Item, root string) []string {
 		rows[i] = strings.TrimRight(row, " ")
 	}
 	return rows
+}
+
+// relativePath names a worktree the way you would say it out loud: relative to
+// the repository root, which is where worktrees usually live and is what makes
+// a column of them readable at a glance.
+//
+// One parked somewhere else entirely keeps its absolute path, because
+// "../../../elsewhere/wt" is no easier to read than the real thing -- and the
+// root itself becomes ".", since whatever printed it has already named the
+// repository.
+func relativePath(path, root string) string {
+	switch {
+	case root == "":
+		return path
+	case path == root:
+		return "."
+	case !strings.HasPrefix(path, root+string(filepath.Separator)):
+		return path
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return path
+	}
+	return relative
 }
 
 // display drops the token from a row, leaving the half meant to be read.

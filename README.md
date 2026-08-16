@@ -104,6 +104,9 @@ options:
   -d, --days N    how quiet a branch or detached worktree must be to count as
                   unused (default: 90)
       --no-fetch  skip the 'git fetch --prune' that refreshes remote state
+      --debug     print the state behind every decision -- how the base
+                  resolved, and why each branch was offered or passed over --
+                  and delete nothing
   -h, --help      show this message
 ```
 
@@ -134,7 +137,7 @@ branch    fix/login-redirect              upstream gone  3 weeks ago   only here
 branch    fix/session-timeout             merged         7 days ago    1 unpushed   fix(auth): stop refreshing an expired session, se…
 branch    spike/graphql-gateway           unused         6 months ago  only here    spike: sketch a graphql gateway in front of the R…
 branch    wip/flaky-scheduler-test        unused         5 months ago  only here    wip: try to reproduce the flaky scheduler test
-kept    worktree /src/checkout-service/.claude/worktrees/agent-e5a018 (detached but recent)
+kept    worktree .claude/worktrees/agent-e5a018 (detached but recent)
 6 rows are "only here": not in origin/main and on no remote -- deleting drops those commits
 ```
 
@@ -167,6 +170,34 @@ That is a question about refs, not about safety. The safety question is the
 `only here` column above, and the two do not line up: a `merged` branch can
 need `-D` and still cost you nothing, while an `unused` branch that git is
 perfectly willing to `-D` may be the only place its commits exist.
+
+## Troubleshooting
+
+`--debug` prints the state behind every decision: how the base resolved and by
+which rule, what each worktree looks like on disk, where each branch's commits
+sit, and an explanation for every branch that was passed over.
+
+```
+## the base
+origin/main  origin/HEAD, the default branch this clone recorded
+             'merged' below means contained in this ref.
+
+## worktrees
+path                            on                    state               last commit   outcome
+.                               main                  clean, in base      7 days ago    the main worktree, never removed
+.claude/worktrees/agent-7f21e0  detached at 077e8d51  clean, not in base  6 months ago  offered (detached)
+.claude/worktrees/agent-e5a018  detached at 48332c03  clean, in base      7 days ago    kept: detached but recent
+
+## branches
+branch                  upstream                    track   in base  in HEAD  outcome
+feature/billing-portal  none                        -       no       no       not merged, upstream not gone, last commit 24 hours ago
+feature/rate-limits     origin/feature/rate-limits  [gone]  no       no       offered (upstream gone)
+main                    origin/main                 -       yes      yes      protected: the base
+```
+
+The base is worth reading first: a clone with no `origin/HEAD` falls back to
+`origin/main`, `origin/master`, `main`, `master`, and a base that quietly
+resolved to something other than what you assumed is behind most empty runs.
 
 ## Compared to other tools
 

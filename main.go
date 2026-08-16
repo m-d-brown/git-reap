@@ -56,6 +56,9 @@ options:
   -d, --days N    how quiet a branch or detached worktree must be to count as
                   unused (default: 90)
       --no-fetch  skip the 'git fetch --prune' that refreshes remote state
+      --debug     print the state behind every decision -- how the base
+                  resolved, and why each branch was offered or passed over --
+                  and delete nothing
   -h, --help      show this message
 `
 
@@ -66,6 +69,7 @@ type options struct {
 	yes     bool
 	days    int
 	fetch   bool
+	debug   bool
 	preview string
 }
 
@@ -90,6 +94,7 @@ func parseArgs(argv []string) (options, error) {
 			"how quiet a branch or detached worktree must be to count as unused")
 	}
 	flags.BoolVar(&noFetch, "no-fetch", false, "skip the 'git fetch --prune' that refreshes remote state")
+	flags.BoolVar(&opts.debug, "debug", false, "print the state behind every decision, and delete nothing")
 	// Used by fzf's preview pane, not by hand.
 	flags.StringVar(&opts.preview, "preview", "", "")
 
@@ -133,7 +138,8 @@ func reap(argv []string) int {
 	if opts.preview != "" {
 		// The picker passes the base along as the positional argument, so the
 		// preview describes a candidate against the same branch the rows do.
-		fmt.Println(renderPreview(opts.preview, findBase(opts.base)))
+		base, _ := findBase(opts.base)
+		fmt.Println(renderPreview(opts.preview, base))
 		return 0
 	}
 
@@ -143,9 +149,11 @@ func reap(argv []string) int {
 		gitRun("fetch", "--prune", "--quiet")
 	}
 
-	base := findBase(opts.base)
+	base, why := findBase(opts.base)
 	if base == "" {
-		return fail(errors.New("could not work out a base branch; pass one"))
+		// why says which rules were tried, since "pass one" on its own leaves
+		// you guessing at what it looked for.
+		return fail(fmt.Errorf("could not work out a base branch; pass one -- %s", why))
 	}
 
 	// Worktrees whose directory was deleted by hand leave admin files behind in
@@ -182,14 +190,18 @@ func reap(argv []string) int {
 	}
 
 	// Never candidates: the base, whatever HEAD is on, and the branch the main
-	// worktree holds, which no amount of worktree removal can free.
-	protected := map[string]bool{strings.TrimPrefix(base, "origin/"): true}
-	if current := gitTry("symbolic-ref", "--quiet", "--short", "HEAD"); current != "" {
-		protected[current] = true
-	}
+	// worktree holds, which no amount of worktree removal can free. The value
+	// is the reason, which --debug reports; they are assigned weakest first, so
+	// a branch that is protected several times over reports the reason that
+	// would outlast the others.
+	protected := map[string]string{}
 	if len(worktrees) > 0 && worktrees[0].Branch != "" {
-		protected[worktrees[0].Branch] = true
+		protected[worktrees[0].Branch] = "held by the main worktree"
 	}
+	if current := gitTry("symbolic-ref", "--quiet", "--short", "HEAD"); current != "" {
+		protected[current] = "the branch you are on"
+	}
+	protected[strings.TrimPrefix(base, "origin/")] = "the base"
 
 	refs, err := gitCapture("for-each-ref", "--format="+branchFormat, "refs/heads")
 	if err != nil {
@@ -207,6 +219,19 @@ func reap(argv []string) int {
 	// Worktrees first: git refuses to delete a branch one has checked out.
 	items := append(worktreeItems, branchItems(branches, candidates, merged, mergedToHead)...)
 
+	// Before the "nothing to reap" exit below, deliberately: a run that offers
+	// nothing when you expected something is the main thing --debug is for, and
+	// bailing out early would print the report only when it was least needed.
+	if opts.debug {
+		reportDebug(debugState{
+			opts: opts, base: base, why: why, root: root,
+			worktrees: worktrees, states: states, branches: branches,
+			merged: merged, mergedToHead: mergedToHead, protected: protected,
+			staleBefore: staleBefore, items: items, kept: kept,
+		})
+		return 0
+	}
+
 	if len(items) == 0 {
 		fmt.Println("git-reap: nothing to reap")
 		return 0
@@ -220,7 +245,7 @@ func reap(argv []string) int {
 			fmt.Println(display(row))
 		}
 		for _, keep := range kept {
-			fmt.Printf("kept    worktree %s (%s)\n", keep.Path, keep.Reason)
+			fmt.Printf("kept    worktree %s (%s)\n", relativePath(keep.Path, root), keep.Reason)
 		}
 		if risk != "" {
 			fmt.Println(risk)

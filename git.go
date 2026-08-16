@@ -48,24 +48,31 @@ func gitSucceeds(args ...string) bool {
 	return err == nil
 }
 
-// findBase works out which branch to measure "merged" against.
+// findBase works out which branch to measure "merged" against, and says where
+// that came from.
 //
 // origin/HEAD records the remote's default branch, when the clone bothered to
 // set it -- `git remote set-head origin -a` refreshes it. Repositories with no
 // remote fall through to the local names.
-func findBase(explicit string) string {
+//
+// The second result exists for --debug: a base that quietly resolved to
+// something other than what you assumed is the usual reason a run offers
+// nothing, and it is invisible until something says which ref was picked and
+// which rule picked it.
+func findBase(explicit string) (string, string) {
 	if explicit != "" {
-		return explicit
+		return explicit, "given on the command line"
 	}
 	if head := gitTry("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); head != "" {
-		return head
+		return head, "origin/HEAD, the default branch this clone recorded"
 	}
 	for _, ref := range baseFallbacks {
 		if gitTry("rev-parse", "--verify", "--quiet", ref) != "" {
-			return ref
+			return ref, "a fallback: origin/HEAD is not set, and this is the first of " +
+				strings.Join(baseFallbacks, ", ") + " that exists"
 		}
 	}
-	return ""
+	return "", "nothing matched: no origin/HEAD, and none of " + strings.Join(baseFallbacks, ", ") + " exists"
 }
 
 // gatherStates looks at each worktree on disk: does it exist, is it dirty, how

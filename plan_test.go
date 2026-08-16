@@ -81,9 +81,25 @@ func TestClassifyBranches(t *testing.T) {
 	}
 
 	t.Run("protected branches are left alone", func(t *testing.T) {
-		got := classifyBranches([]Branch{branch("main", 10, "[gone]")}, nil, set("main"), staleBefore)
+		protected := map[string]string{"main": "the base"}
+		got := classifyBranches([]Branch{branch("main", 10, "[gone]")}, nil, protected, staleBefore)
 		if len(got) != 0 {
 			t.Errorf("classifyBranches = %v, want empty", got)
+		}
+	})
+
+	// The half --debug prints. Every branch that is not a candidate gets an
+	// explanation, and a protected one names which protection applied.
+	t.Run("branches that are passed over say why", func(t *testing.T) {
+		protected := map[string]string{"main": "the base"}
+		if _, why := classify(branch("main", 10, "[gone]"), nil, protected, staleBefore); why != "protected: the base" {
+			t.Errorf("classify(main) = %q, want the protection reason", why)
+		}
+		if _, why := classify(branch("active", 100, ""), nil, nil, staleBefore); !strings.Contains(why, "not merged") {
+			t.Errorf("classify(active) = %q, want a reason mentioning the merge", why)
+		}
+		if reason, why := classify(branch("done", 100, ""), set("done"), nil, staleBefore); reason != Merged || why != "" {
+			t.Errorf("classify(done) = %q/%q, want merged and no explanation", reason, why)
 		}
 	})
 }

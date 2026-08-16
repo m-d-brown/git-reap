@@ -49,6 +49,27 @@ func TestFormatRows(t *testing.T) {
 	})
 }
 
+func TestRelativePath(t *testing.T) {
+	tests := []struct {
+		name, path, root, want string
+	}{
+		{"inside the repository", "/repo/wt/one", "/repo", "wt/one"},
+		{"the root itself", "/repo", "/repo", "."},
+		// Worth keeping absolute: "../../elsewhere/wt" reads no better, and a
+		// sibling worktree is a perfectly ordinary layout.
+		{"outside the repository", "/elsewhere/wt", "/repo", "/elsewhere/wt"},
+		{"a name that merely shares the prefix", "/repository/wt", "/repo", "/repository/wt"},
+		{"no root to measure against", "/repo/wt", "", "/repo/wt"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := relativePath(test.path, test.root); got != test.want {
+				t.Errorf("relativePath(%q, %q) = %q, want %q", test.path, test.root, got, test.want)
+			}
+		})
+	}
+}
+
 func TestRed(t *testing.T) {
 	// Set either way rather than read, so the developer's own NO_COLOR does not
 	// decide which of these passes.
