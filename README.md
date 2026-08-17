@@ -215,9 +215,13 @@ what most abandoned work actually looks like.
 ## Development
 
 ```sh
-go test ./...     # unit tests, plus an integration test against a real repository
-go vet ./...
+make check    # gofmt, vet, and tests -- exactly what CI runs
+make          # list every target
+make demo     # a repository with one of everything, to try the picker against
 ```
+
+`make check` is the whole gate: CI runs that target rather than its own copy of
+the steps, so passing it here is passing it there.
 
 The integration test builds the binary and runs it against a temporary
 repository holding one of everything — a merged branch, a squash-merged branch
