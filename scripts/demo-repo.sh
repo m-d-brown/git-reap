@@ -87,6 +87,8 @@ git remote set-head origin -a
 land feature/avatar-upload "feat(profile): upload and crop avatars" 12
 land chore/bump-deps "chore: bump axios, vite, and typescript" 5
 land feature/csv-export "feat(reports): export a run as CSV" 9
+# Merged, and about to be pinned by a worktree with uncommitted work in it.
+land feature/invoice-pdf "feat(billing): render an invoice as PDF" 16
 
 land_unpushed fix/session-timeout "fix(auth): stop refreshing an expired session" 7
 
@@ -104,5 +106,34 @@ git push -q origin main
 # tooling leaves under .claude/worktrees.
 git worktree add -q worktrees/csv-export feature/csv-export
 git worktree add -q --detach .claude/worktrees/agent-7f21e0 spike/graphql-gateway
+# Merged, so the branch qualifies -- but this worktree is holding uncommitted
+# work, and git will not delete a branch out from under a worktree. Both are
+# reported as kept rather than offered.
+git worktree add -q worktrees/invoice-pdf feature/invoice-pdf
+printf 'landscape tables\n' > worktrees/invoice-pdf/layout-notes.txt
+printf 'wip\n' >> worktrees/invoice-pdf/feat_billing__render_an_invoice_as_PDF.txt
+printf 'draft\n' > worktrees/invoice-pdf/logo.svg
 git worktree add -q --detach .claude/worktrees/agent-b3c94d wip/flaky-scheduler-test
 git worktree add -q --detach .claude/worktrees/agent-e5a018
+
+# park <worktree> <days-ago>: age the HEAD in the worktree's admin directory,
+# which is what git-reap reads for "last used". `git worktree add` writes that
+# file now, however old the commit underneath is, so an abandoned worktree looks
+# brand new until this runs -- and a detached worktree is judged on when it was
+# last used, not on the age of the commit it happens to be parked on.
+#
+# GNU touch takes "-d @<epoch>" and BSD touch does not, so the fallback spells
+# the same instant the way BSD wants it. `date -r` means opposite things on the
+# two platforms, which is why it is only reached when the GNU form has failed.
+park() {
+  local admin when
+  admin=$(git -C "$1" rev-parse --absolute-git-dir)
+  when=$((NOW - $2 * 86400))
+  touch -d "@$when" "$admin/HEAD" 2>/dev/null ||
+    touch -t "$(date -r "$when" +%Y%m%d%H%M.%S)" "$admin/HEAD"
+}
+
+# agent-e5a018 is deliberately left alone: it was used just now, so it is the
+# one the run keeps.
+park .claude/worktrees/agent-7f21e0 175
+park .claude/worktrees/agent-b3c94d 130

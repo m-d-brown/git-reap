@@ -26,8 +26,9 @@ found, and deletes only what you pick using `fzf`.
   the ones that are `only here` — in neither the base nor any remote — say so in
   red in the preview pane, with the number of commits at stake. `--dry-run` and
   the confirmation count them before you agree to anything.
-- **It says what it skipped.** `--dry-run` lists the candidates *and* the
-  worktrees it left alone, with the reason for each.
+- **It says what it skipped.** `--dry-run` lists the candidates *and* everything
+  it left alone, with the reason for each — and every row it does offer is a
+  deletion that will really happen.
 - **Nothing to configure.** No config file, no state, no remote API, no token.
   One binary, and `git` and `fzf` on your `PATH`.
 
@@ -139,8 +140,8 @@ git reap develop        # measure "merged" against develop
 information is:
 
 ```
-worktree  .claude/worktrees/agent-7f21e0  detached       6 months ago  only here    detached at 1baafd65
-worktree  .claude/worktrees/agent-b3c94d  detached       5 months ago  only here    detached at 71161480
+worktree  .claude/worktrees/agent-7f21e0  detached       5 months ago  only here    detached at b3716afd
+worktree  .claude/worktrees/agent-b3c94d  detached       4 months ago  only here    detached at 17eacec5
 worktree  worktrees/csv-export            merged         9 days ago    clean        feature/csv-export
 branch    chore/bump-deps                 merged         5 days ago    no upstream  chore: bump axios, vite, and typescript
 branch    feature/avatar-upload           merged         12 days ago   no upstream  feat(profile): upload and crop avatars
@@ -160,6 +161,11 @@ kept    branch   feature/invoice-pdf (checked out at worktrees/invoice-pdf, whic
 so nothing is lost by deleting it, but one commit never reached
 `origin/fix-session-timeout` — which is the ref `git branch -d` measures it
 against, and the reason it needs `-D`.
+
+`feature/invoice-pdf` is the pair at the bottom: the branch is merged and would
+otherwise be offered, but the worktree on it is holding three uncommitted files,
+and git will not delete a branch out from under a worktree. Neither is offered,
+and both say why.
 
 ## How it decides
 
@@ -198,11 +204,11 @@ origin/main  origin/HEAD, the default branch this clone recorded
              'merged' below means contained in this ref.
 
 ## worktrees
-path                            on                    state                                 last commit   last used     outcome
-.                               main                  clean, in base                        7 days ago    2 hours ago   the main worktree, never removed
-.claude/worktrees/agent-7f21e0  detached at 077e8d51  clean, not in base                    6 months ago  5 months ago  offered (detached)
-.claude/worktrees/agent-e5a018  detached at 48332c03  clean, in base                        7 days ago    1 hour ago    kept: detached but recent
-worktrees/invoice-pdf           feature/invoice-pdf   dirty (3 uncommitted files), in base  9 days ago    3 days ago    kept: 3 uncommitted files
+path                            on                    state                                 last commit   last used      outcome
+.                               main                  dirty (2 uncommitted files), in base  7 days ago    8 seconds ago  the main worktree, never removed
+.claude/worktrees/agent-7f21e0  detached at b3716afd  clean, not in base                    6 months ago  5 months ago   offered (detached)
+.claude/worktrees/agent-e5a018  detached at 610864d2  clean, in base                        7 days ago    8 seconds ago  kept: detached but recent
+worktrees/invoice-pdf           feature/invoice-pdf   dirty (3 uncommitted files), in base  2 weeks ago   8 seconds ago  kept: 3 uncommitted files
 
 ## branches
 branch                  upstream                    track   in base  in HEAD  outcome
