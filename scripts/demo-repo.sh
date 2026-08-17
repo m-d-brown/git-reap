@@ -133,7 +133,11 @@ park() {
     touch -t "$(date -r "$when" +%Y%m%d%H%M.%S)" "$admin/HEAD"
 }
 
+# Parked a little after the commits they sit on, which is the honest order of
+# events and, at these ages, renders as the same relative age -- so the ages in
+# docs/screenshot.png do not turn on this.
+#
 # agent-e5a018 is deliberately left alone: it was used just now, so it is the
 # one the run keeps.
 park .claude/worktrees/agent-7f21e0 175
-park .claude/worktrees/agent-b3c94d 130
+park .claude/worktrees/agent-b3c94d 140

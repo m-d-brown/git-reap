@@ -375,6 +375,8 @@ func TestUncommitted(t *testing.T) {
 }
 
 func TestHumanizeSince(t *testing.T) {
+	// The wants are what `git log --format=%cr` prints for the same interval,
+	// because the report puts the two in adjacent columns.
 	const now = 1_000_000_000
 	tests := []struct {
 		seconds int64
@@ -383,18 +385,22 @@ func TestHumanizeSince(t *testing.T) {
 		{0, "0 seconds ago"},
 		{1, "1 second ago"},
 		{45, "45 seconds ago"},
-		{60, "1 minute ago"},
-		{3599, "59 minutes ago"},
-		{3600, "1 hour ago"},
+		{89, "89 seconds ago"},
+		{90, "2 minutes ago"},
+		{3599, "60 minutes ago"},
+		{90 * 60, "2 hours ago"},
 		{5 * 3600, "5 hours ago"},
-		{secondsPerDay, "1 day ago"},
+		{secondsPerDay, "24 hours ago"},
+		{36 * 3600, "2 days ago"},
 		{13 * secondsPerDay, "13 days ago"},
 		{14 * secondsPerDay, "2 weeks ago"},
-		{69 * secondsPerDay, "9 weeks ago"},
+		{69 * secondsPerDay, "10 weeks ago"},
 		{70 * secondsPerDay, "2 months ago"},
+		{145 * secondsPerDay, "5 months ago"},
 		{364 * secondsPerDay, "12 months ago"},
 		{365 * secondsPerDay, "1 year ago"},
-		{800 * secondsPerDay, "2 years ago"},
+		{800 * secondsPerDay, "2 years, 2 months ago"},
+		{2000 * secondsPerDay, "5 years ago"},
 	}
 	for _, test := range tests {
 		if got := humanizeSince(now-test.seconds, now); got != test.want {

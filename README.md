@@ -140,8 +140,8 @@ git reap develop        # measure "merged" against develop
 information is:
 
 ```
-worktree  .claude/worktrees/agent-7f21e0  detached       5 months ago  only here    detached at b3716afd
-worktree  .claude/worktrees/agent-b3c94d  detached       4 months ago  only here    detached at 17eacec5
+worktree  .claude/worktrees/agent-7f21e0  detached       6 months ago  only here    detached at 614b44f5
+worktree  .claude/worktrees/agent-b3c94d  detached       5 months ago  only here    detached at 4c9bfea6
 worktree  worktrees/csv-export            merged         9 days ago    clean        feature/csv-export
 branch    chore/bump-deps                 merged         5 days ago    no upstream  chore: bump axios, vite, and typescript
 branch    feature/avatar-upload           merged         12 days ago   no upstream  feat(profile): upload and crop avatars
@@ -204,11 +204,11 @@ origin/main  origin/HEAD, the default branch this clone recorded
              'merged' below means contained in this ref.
 
 ## worktrees
-path                            on                    state                                 last commit   last used      outcome
-.                               main                  dirty (2 uncommitted files), in base  7 days ago    8 seconds ago  the main worktree, never removed
-.claude/worktrees/agent-7f21e0  detached at b3716afd  clean, not in base                    6 months ago  5 months ago   offered (detached)
-.claude/worktrees/agent-e5a018  detached at 610864d2  clean, in base                        7 days ago    8 seconds ago  kept: detached but recent
-worktrees/invoice-pdf           feature/invoice-pdf   dirty (3 uncommitted files), in base  2 weeks ago   8 seconds ago  kept: 3 uncommitted files
+path                            on                    state                                 last commit   last used       outcome
+.                               main                  dirty (2 uncommitted files), in base  7 days ago    23 seconds ago  the main worktree, never removed
+.claude/worktrees/agent-7f21e0  detached at 614b44f5  clean, not in base                    6 months ago  6 months ago    offered (detached)
+.claude/worktrees/agent-e5a018  detached at 30fc51d1  clean, in base                        7 days ago    23 seconds ago  kept: detached but recent
+worktrees/invoice-pdf           feature/invoice-pdf   dirty (3 uncommitted files), in base  2 weeks ago   23 seconds ago  kept: 3 uncommitted files
 
 ## branches
 branch                  upstream                    track   in base  in HEAD  outcome

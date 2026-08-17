@@ -331,33 +331,54 @@ func humanize(unix int64) string {
 }
 
 // humanizeSince is humanize against a given now, which is what makes it
-// testable. The thresholds are git's: days up to a fortnight, then weeks, then
-// months, then years.
+// testable.
+//
+// This is git's own show_date_relative, thresholds and rounding both, rather
+// than an approximation of it. The two live side by side -- the debug report
+// puts a %cr last-commit column next to a last-used one rendered here -- so an
+// approximation would have the same instant reading "5 months ago" in one
+// column and "4 months ago" in the next, which looks like a bug in the thing
+// the columns are there to explain.
 func humanizeSince(unix, now int64) string {
 	if unix <= 0 {
 		return "unknown"
 	}
-	seconds := now - unix
-	if seconds < 0 {
-		seconds = 0
+	diff := now - unix
+	if diff < 0 {
+		diff = 0
 	}
-	for _, unit := range []struct {
-		name string
-		size int64
-		upto int64
-	}{
-		{"second", 1, 60},
-		{"minute", 60, 3600},
-		{"hour", 3600, secondsPerDay},
-		{"day", secondsPerDay, 14 * secondsPerDay},
-		{"week", 7 * secondsPerDay, 70 * secondsPerDay},
-		{"month", 30 * secondsPerDay, 365 * secondsPerDay},
-	} {
-		if seconds < unit.upto {
-			return plural(seconds/unit.size, unit.name) + " ago"
+	if diff < 90 {
+		return plural(diff, "second") + " ago"
+	}
+	diff = (diff + 30) / 60 // minutes
+	if diff < 90 {
+		return plural(diff, "minute") + " ago"
+	}
+	diff = (diff + 30) / 60 // hours
+	if diff < 36 {
+		return plural(diff, "hour") + " ago"
+	}
+	diff = (diff + 12) / 24 // days from here on
+	if diff < 14 {
+		return plural(diff, "day") + " ago"
+	}
+	if diff < 70 {
+		return plural((diff+3)/7, "week") + " ago"
+	}
+	if diff < 365 {
+		return plural((diff+15)/30, "month") + " ago"
+	}
+	// Under five years git spells out the leftover months, since "1 year ago"
+	// and "1 year, 11 months ago" are not the same news.
+	if diff < 1825 {
+		totalMonths := (diff*12*2 + 365) / (365 * 2)
+		years, months := totalMonths/12, totalMonths%12
+		if months > 0 {
+			return plural(years, "year") + ", " + plural(months, "month") + " ago"
 		}
+		return plural(years, "year") + " ago"
 	}
-	return plural(seconds/(365*secondsPerDay), "year") + " ago"
+	return plural((diff+183)/365, "year") + " ago"
 }
 
 // plural counts a unit in words: "1 day", "3 days".
