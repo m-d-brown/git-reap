@@ -72,10 +72,20 @@ type Worktree struct {
 // gathered separately from the porcelain listing so that the planning below
 // stays a pure function of its inputs.
 type State struct {
-	Exists      bool
+	Exists bool
+	// DirtyCount is how many paths `git status --porcelain` reported, which is
+	// worth keeping rather than reducing to a flag: "kept, 1 uncommitted file"
+	// and "kept, 40 uncommitted files" call for different reactions.
+	DirtyCount  int
 	Dirty       bool
 	CommittedAt int64
 	Relative    string
+	// TouchedAt is when the worktree was last used, as opposed to when the
+	// commit it sits on was written. The two come apart badly on a detached
+	// worktree: one created minutes ago from an old commit looks ancient by
+	// CommittedAt, which is the wrong answer to "has this been abandoned".
+	TouchedAt       int64
+	TouchedRelative string
 	// InBase says whether the worktree's HEAD is contained in the base branch.
 	// A detached worktree whose HEAD is not carries commits that removing it
 	// would orphan.
@@ -104,9 +114,15 @@ type Item struct {
 // Token is the stable id round-tripped through fzf and --preview.
 func (i Item) Token() string { return string(i.Kind) + ":" + i.Key }
 
-// Kept is a worktree we left alone, and why, so --dry-run can explain itself.
+// Kept is something we left alone, and why, so --dry-run can explain itself.
+//
+// Branches end up here as well as worktrees: one that another worktree has
+// checked out cannot be deleted while that worktree stays, so offering it would
+// be offering a row that does nothing.
 type Kept struct {
-	Path   string
+	Kind Kind
+	// Name is the branch name, or the worktree path.
+	Name   string
 	Reason string
 }
 

@@ -30,6 +30,10 @@ type debugState struct {
 	staleBefore  int64
 	items        []Item
 	kept         []Kept
+	// pinned maps a branch to the reason a worktree still holding it kept it
+	// out of the run, which classify cannot work out on its own: it depends on
+	// which worktrees survived.
+	pinned map[string]string
 }
 
 // reportDebug prints the state behind every decision this run made: how the
@@ -52,7 +56,8 @@ func reportDebug(state debugState) {
 	} else {
 		fmt.Fprintln(out, "fetch\tskipped (--no-fetch), so [gone] is only as fresh as the last fetch")
 	}
-	fmt.Fprintf(out, "days\t%d -- a branch or detached worktree is idle if its last commit predates %s\n",
+	fmt.Fprintf(out, "days\t%d -- idle means before %s: for a branch its last commit, "+
+		"for a detached worktree when it was last used\n",
 		state.opts.days, time.Unix(state.staleBefore, 0).Format("2006-01-02 15:04"))
 	fmt.Fprintln(out)
 
@@ -78,13 +83,16 @@ func reportWorktrees(out *tabwriter.Writer, state debugState) {
 	}
 	kept := map[string]string{}
 	for _, keep := range state.kept {
-		kept[keep.Path] = keep.Reason
+		if keep.Kind == WorktreeKind {
+			kept[keep.Name] = keep.Reason
+		}
 	}
 
 	// Paths are relative to the root named at the top of the report, which is
-	// the one place the report spells the repository out in full.
+	// the one place the report spells the repository out in full. Both clocks
+	// are shown because the detached rule turns on the difference between them.
 	fmt.Fprintln(out, "## worktrees")
-	fmt.Fprintln(out, "path\ton\tstate\tlast commit\toutcome")
+	fmt.Fprintln(out, "path\ton\tstate\tlast commit\tlast used\toutcome")
 	for i, worktree := range state.worktrees {
 		on := worktree.Branch
 		if on == "" {
@@ -98,7 +106,7 @@ func reportWorktrees(out *tabwriter.Writer, state debugState) {
 			facts = append(facts, "directory gone")
 		default:
 			if current.Dirty {
-				facts = append(facts, "dirty")
+				facts = append(facts, "dirty ("+uncommitted(current.DirtyCount)+")")
 			} else {
 				facts = append(facts, "clean")
 			}
@@ -124,8 +132,9 @@ func reportWorktrees(out *tabwriter.Writer, state debugState) {
 			outcome = "not offered"
 		}
 
-		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n",
-			relativePath(worktree.Path, state.root), on, strings.Join(facts, ", "), current.Relative, outcome)
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			relativePath(worktree.Path, state.root), on, strings.Join(facts, ", "),
+			current.Relative, current.TouchedRelative, outcome)
 	}
 	fmt.Fprintln(out)
 }
@@ -153,13 +162,21 @@ func reportBranches(out *tabwriter.Writer, state debugState) {
 		}
 
 		outcome := ""
-		if reason, why := classify(branch, state.merged, state.protected, state.staleBefore); reason != "" {
+		reason, why := classify(branch, state.merged, state.protected, state.staleBefore)
+		switch {
+		case reason == "":
+			outcome = why
+		case state.pinned[branch.Name] != "":
+			// It qualified, and then the worktree holding it stayed, so it is
+			// kept rather than offered. Naming the reason it qualified as well
+			// keeps the branch worth coming back to once that worktree is dealt
+			// with.
+			outcome = "kept (" + string(reason) + "): " + state.pinned[branch.Name]
+		default:
 			outcome = "offered (" + string(reason) + ")"
-			if holder := worktreeHolding(branch.Name); holder != "" {
+			if holder := holderOf(branch.Name, state.worktrees); holder != "" {
 				outcome += ", checked out at " + relativePath(holder, state.root)
 			}
-		} else {
-			outcome = why
 		}
 
 		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\n", branch.Name, upstream, track,

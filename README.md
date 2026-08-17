@@ -40,10 +40,16 @@ found, and deletes only what you pick using `fzf`.
 | `merged`        | the branch is already contained in the base branch                                      |
 | `upstream gone` | the remote branch was deleted — what a squash-merged, closed pull request leaves behind |
 | `unused`        | no commits on the branch in the last `--days` days (90 by default)                      |
-| `detached`      | a clean worktree on a detached HEAD, idle for `--days` days                             |
+| `detached`      | a clean worktree on a detached HEAD, untouched for `--days` days                        |
 
 Worktrees are removed before branches, because git refuses to delete a branch
 that a worktree has checked out.
+
+For a branch, `--days` counts from its last commit. For a detached worktree it
+counts from when the worktree itself was last used, which is not the same
+thing: agent tooling branches from whatever commit is to hand, so a worktree
+created minutes ago routinely sits on a months-old one, and reading the commit
+date would offer to delete a worktree somebody is working in.
 
 Every row also says where its commits live, which is the part worth reading
 before you mark anything:
@@ -66,6 +72,12 @@ the red out of it.
 worktree holds, the main worktree itself, any worktree that is locked, has
 uncommitted changes, or is the one you are standing in. And any branch that is
 none of the four above.
+
+A branch that one of those worktrees has checked out is not offered either,
+however well it qualifies: git will not delete a branch out from under a
+worktree, so the row would be one you could mark and watch do nothing. It is
+reported as kept, naming the worktree in the way — deal with that worktree and
+the next run will offer the branch.
 
 ## Install
 
@@ -101,8 +113,9 @@ options:
   -n, --dry-run   list the candidates, and what was skipped, without deleting
   -a, --all       take every candidate instead of picking through fzf
   -y, --yes       skip the confirmation prompt that --all asks for
-  -d, --days N    how quiet a branch or detached worktree must be to count as
-                  unused (default: 90)
+  -d, --days N    how quiet something must be to count as unused: for a branch,
+                  since its last commit; for a detached worktree, since it was
+                  last used (default: 90)
       --no-fetch  skip the 'git fetch --prune' that refreshes remote state
       --debug     print the state behind every decision -- how the base
                   resolved, and why each branch was offered or passed over --
@@ -138,6 +151,8 @@ branch    fix/session-timeout             merged         7 days ago    1 unpushe
 branch    spike/graphql-gateway           unused         6 months ago  only here    spike: sketch a graphql gateway in front of the R…
 branch    wip/flaky-scheduler-test        unused         5 months ago  only here    wip: try to reproduce the flaky scheduler test
 kept    worktree .claude/worktrees/agent-e5a018 (detached but recent)
+kept    worktree worktrees/invoice-pdf (3 uncommitted files)
+kept    branch   feature/invoice-pdf (checked out at worktrees/invoice-pdf, which is kept: 3 uncommitted files)
 6 rows are "only here": not in origin/main and on no remote -- deleting drops those commits
 ```
 
@@ -183,14 +198,16 @@ origin/main  origin/HEAD, the default branch this clone recorded
              'merged' below means contained in this ref.
 
 ## worktrees
-path                            on                    state               last commit   outcome
-.                               main                  clean, in base      7 days ago    the main worktree, never removed
-.claude/worktrees/agent-7f21e0  detached at 077e8d51  clean, not in base  6 months ago  offered (detached)
-.claude/worktrees/agent-e5a018  detached at 48332c03  clean, in base      7 days ago    kept: detached but recent
+path                            on                    state                                 last commit   last used     outcome
+.                               main                  clean, in base                        7 days ago    2 hours ago   the main worktree, never removed
+.claude/worktrees/agent-7f21e0  detached at 077e8d51  clean, not in base                    6 months ago  5 months ago  offered (detached)
+.claude/worktrees/agent-e5a018  detached at 48332c03  clean, in base                        7 days ago    1 hour ago    kept: detached but recent
+worktrees/invoice-pdf           feature/invoice-pdf   dirty (3 uncommitted files), in base  9 days ago    3 days ago    kept: 3 uncommitted files
 
 ## branches
 branch                  upstream                    track   in base  in HEAD  outcome
 feature/billing-portal  none                        -       no       no       not merged, upstream not gone, last commit 24 hours ago
+feature/invoice-pdf     none                        -       yes      yes      kept (merged): checked out at worktrees/invoice-pdf, which is kept: 3 uncommitted files
 feature/rate-limits     origin/feature/rate-limits  [gone]  no       no       offered (upstream gone)
 main                    origin/main                 -       yes      yes      protected: the base
 ```
@@ -226,7 +243,8 @@ the steps, so passing it here is passing it there.
 The integration test builds the binary and runs it against a temporary
 repository holding one of everything — a merged branch, a squash-merged branch
 whose upstream is gone, an idle branch, an active branch, and worktrees that are
-merged, dirty, idle-detached, and freshly detached — with a bare repository next
+merged, dirty, idle-detached, freshly detached, and detached on an old commit
+but recently used — with a bare repository next
 door standing in for the remote, so the fetch is real but offline.
 
 The screenshots above are not mockups, and they are not hand-maintained:

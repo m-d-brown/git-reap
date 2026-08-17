@@ -2,19 +2,22 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The fixture repository holds one of everything the tool has an opinion about:
 // a merged branch, a branch whose upstream was deleted (the squash-merge case),
 // an idle branch, an active branch, and worktrees that are merged, dirty,
-// idle-detached, and freshly detached. The "remote" is a bare repository next
-// door, so the fetch is real but offline.
+// idle-detached, freshly detached, and detached on an old commit but recently
+// used. The "remote" is a bare repository next door, so the fetch is real but
+// offline.
 
 // ancient is old enough to count as unused at the default threshold.
 const ancient = "2020-01-01T00:00:00"
@@ -110,6 +113,21 @@ func (r *repo) gitIn(dir, when string, args ...string) string {
 
 func (r *repo) path(name string) string { return filepath.Join(r.root, name) }
 
+// backdate makes a worktree look abandoned, by aging the HEAD in its admin
+// directory -- which is what git-reap reads for "last used", and which
+// `git worktree add` writes as it goes, however old the commit underneath is.
+func (r *repo) backdate(name string) {
+	r.t.Helper()
+	when, err := time.Parse("2006-01-02T15:04:05", ancient)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	admin := r.git("-C", r.path(name), "rev-parse", "--absolute-git-dir")
+	if err := os.Chtimes(filepath.Join(admin, "HEAD"), when, when); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
 func (r *repo) commit(name, when string) {
 	r.t.Helper()
 	if err := os.WriteFile(filepath.Join(r.work, name), []byte(name), 0o644); err != nil {
@@ -181,9 +199,18 @@ func (r *repo) build() {
 		r.t.Fatal(err)
 	}
 
-	// Two detached worktrees, one parked on an ancient commit and one on a
-	// current commit -- the agent-worktree shape.
+	// Three detached worktrees -- the agent-worktree shape. wt-new sits on a
+	// current commit, and the other two on an ancient one, differing only in
+	// when they were last used: wt-old is backdated to look abandoned, while
+	// wt-parked keeps the fresh mtime that `git worktree add` just wrote.
+	//
+	// wt-parked is the case the commit date gets wrong. Agent tooling branches
+	// from whatever commit is to hand, so a worktree made seconds ago routinely
+	// sits on a months-old commit, and reading that commit would offer to
+	// delete a worktree somebody is working in right now.
 	r.git("worktree", "add", "-q", "--detach", r.path("wt-old"), "forgotten")
+	r.backdate("wt-old")
+	r.git("worktree", "add", "-q", "--detach", r.path("wt-parked"), "forgotten")
 	r.git("worktree", "add", "-q", "--detach", r.path("wt-new"))
 
 	// Everything merged above has to reach the remote, since the base is
@@ -310,12 +337,58 @@ func TestDryRunListsEveryKindOfCandidateAndChangesNothing(t *testing.T) {
 	got := r.run("-n")
 	contains(t, got.stdout, "merged-feature", "upstream gone", "unused", "detached",
 		// Kept, with a reason, rather than offered.
-		"kept    worktree "+r.path("wt-dirty")+" (uncommitted changes)",
+		"kept    worktree "+r.path("wt-dirty")+" (1 uncommitted file)",
 		"detached but recent")
 	lacks(t, got.stdout, "active")
 
 	if !equal(r.branches(), branchesBefore) || !equal(r.worktrees(), worktreesBefore) {
 		t.Errorf("--dry-run changed the repository: %v %v", r.branches(), r.worktrees())
+	}
+}
+
+// Every offered row is a deletion that will really happen. A branch a kept
+// worktree has checked out is not one of those -- git would refuse it -- so it
+// is reported alongside the worktree that is holding it rather than listed as
+// something to pick.
+func TestABranchHeldByAKeptWorktreeIsReportedNotOffered(t *testing.T) {
+	r := newRepo(t)
+
+	got := r.run("-n")
+	contains(t, got.stdout, "kept    branch   wt-dirty (checked out at "+
+		r.path("wt-dirty")+", which is kept: 1 uncommitted file)")
+
+	for _, line := range strings.Split(got.stdout, "\n") {
+		if strings.HasPrefix(line, "branch") && strings.Contains(line, "wt-dirty") {
+			t.Errorf("wt-dirty was offered as a row that could not be deleted: %q", line)
+		}
+	}
+}
+
+// A run with nothing on offer is the one where the omissions matter most, so
+// --dry-run reports them before it reports the emptiness.
+func TestDryRunExplainsItselfWhenNothingIsOffered(t *testing.T) {
+	r := newRepo(t)
+	// Clear out everything that can go, leaving only the things that cannot.
+	r.run("-a", "-y")
+
+	got := r.run("-n", "--no-fetch")
+	contains(t, got.stdout, "nothing to reap",
+		"kept    worktree "+r.path("wt-dirty")+" (1 uncommitted file)",
+		"kept    branch   wt-dirty (checked out at ")
+}
+
+// The count in the confirmation is the count of things that will go, which is
+// the same claim the offered rows make.
+func TestTheConfirmationCountsOnlyWhatWillBeDeleted(t *testing.T) {
+	r := newRepo(t)
+	before := len(r.branches()) + len(r.worktrees())
+
+	got := r.runWith("y\n", "", "-a")
+	after := len(r.branches()) + len(r.worktrees())
+
+	want := fmt.Sprintf("Delete %d item(s)", before-after)
+	if !strings.Contains(got.stdout, want) {
+		t.Errorf("output does not mention %q, but deleted %d:\n%s", want, before-after, got.stdout)
 	}
 }
 
@@ -339,7 +412,9 @@ func TestAllDeletesEveryCandidate(t *testing.T) {
 	if want := []string{"main", "active", "wt-dirty"}; !equal(r.branches(), want) {
 		t.Errorf("branches = %v, want %v", r.branches(), want)
 	}
-	want := []string{r.work, r.path("wt-dirty"), r.path("wt-new")}
+	// wt-parked is detached on the same ancient commit as wt-old, and survives
+	// because it was used just now.
+	want := []string{r.work, r.path("wt-dirty"), r.path("wt-parked"), r.path("wt-new")}
 	if !equal(r.worktrees(), want) {
 		t.Errorf("worktrees = %v, want %v", r.worktrees(), want)
 	}
@@ -589,7 +664,29 @@ func TestDebugExplainsEveryDecisionAndChangesNothing(t *testing.T) {
 		"protected: the base",
 		"not merged, upstream not gone",
 		// The worktree state behind a decision, rather than just the decision.
-		"kept: uncommitted changes")
+		"kept: 1 uncommitted file",
+		"dirty (1 uncommitted file)",
+		// A branch that qualified and is held anyway says both halves.
+		"kept (merged): checked out at "+r.path("wt-dirty"),
+		// Both clocks, since the detached rule turns on the gap between them.
+		"last commit", "last used")
+
+	// wt-old and wt-parked are detached on the same ancient commit and differ
+	// only in when they were last used, so the outcomes have to differ too.
+	for _, want := range []struct{ worktree, outcome string }{
+		{"wt-old", "offered (detached)"},
+		{"wt-parked", "kept: detached but recent"},
+	} {
+		found := false
+		for _, line := range strings.Split(got.stdout, "\n") {
+			if strings.HasPrefix(line, r.path(want.worktree)) && strings.Contains(line, want.outcome) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no %s row reading %q:\n%s", want.worktree, want.outcome, got.stdout)
+		}
+	}
 
 	if !equal(r.branches(), branchesBefore) || !equal(r.worktrees(), worktreesBefore) {
 		t.Errorf("--debug changed the repository: %v %v", r.branches(), r.worktrees())

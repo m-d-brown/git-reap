@@ -7,12 +7,15 @@
 //	upstream gone  a branch whose remote branch was deleted -- what a
 //	               squash-merged and closed pull request leaves behind
 //	unused         a branch with no commits in the last --days days
-//	detached       a clean worktree on a detached HEAD, idle for --days days,
-//	               which is what agent tooling under .claude/worktrees leaves
+//	detached       a clean worktree on a detached HEAD, untouched for --days
+//	               days, which is what agent tooling under .claude/worktrees
+//	               leaves
 //
 // Worktrees are removed before branches, because git refuses to delete a branch
 // that a worktree has checked out. A worktree that is locked, dirty, or the one
-// you are standing in is never offered.
+// you are standing in is never offered -- and neither is a branch one of those
+// is holding, since nothing could delete it while the worktree stays. Whatever
+// is passed over says so, and says why.
 //
 // By default the candidates go through fzf so you can pick: each row carries
 // the age, where its commits live, and the last commit subject, and the preview
@@ -53,8 +56,9 @@ options:
   -n, --dry-run   list the candidates, and what was skipped, without deleting
   -a, --all       take every candidate instead of picking through fzf
   -y, --yes       skip the confirmation prompt that --all asks for
-  -d, --days N    how quiet a branch or detached worktree must be to count as
-                  unused (default: 90)
+  -d, --days N    how quiet something must be to count as unused: for a branch,
+                  since its last commit; for a detached worktree, since it was
+                  last used (default: 90)
       --no-fetch  skip the 'git fetch --prune' that refreshes remote state
       --debug     print the state behind every decision -- how the base
                   resolved, and why each branch was offered or passed over --
@@ -216,6 +220,17 @@ func reap(argv []string) int {
 		return fail(err)
 	}
 	worktreeItems, kept := planWorktrees(worktrees, states, candidates, root, staleBefore)
+
+	// A branch still held by a worktree we are keeping cannot be deleted, so it
+	// is reported as kept rather than offered as a row that would do nothing.
+	// This runs after the worktrees are planned because that is what settles
+	// which holders are staying.
+	pinned := pinBranches(candidates, worktrees, kept, root)
+	for _, pin := range pinned {
+		delete(candidates, pin.Name)
+	}
+	kept = append(kept, pinned...)
+
 	// Worktrees first: git refuses to delete a branch one has checked out.
 	items := append(worktreeItems, branchItems(branches, candidates, merged, mergedToHead)...)
 
@@ -223,33 +238,46 @@ func reap(argv []string) int {
 	// nothing when you expected something is the main thing --debug is for, and
 	// bailing out early would print the report only when it was least needed.
 	if opts.debug {
+		pins := map[string]string{}
+		for _, pin := range pinned {
+			pins[pin.Name] = pin.Reason
+		}
 		reportDebug(debugState{
 			opts: opts, base: base, why: why, root: root,
 			worktrees: worktrees, states: states, branches: branches,
 			merged: merged, mergedToHead: mergedToHead, protected: protected,
-			staleBefore: staleBefore, items: items, kept: kept,
+			staleBefore: staleBefore, items: items, kept: kept, pinned: pins,
 		})
-		return 0
-	}
-
-	if len(items) == 0 {
-		fmt.Println("git-reap: nothing to reap")
 		return 0
 	}
 
 	rows := formatRows(items, root)
 	risk := riskSummary(items, base)
+
+	// Ahead of the "nothing to reap" exit below, because the omissions are what
+	// --dry-run is for. A run with nothing on offer is exactly the one where
+	// the reasons are worth printing: a merged branch that never appeared
+	// because a dirty worktree is sitting on it is a fact about your
+	// repository, not an empty answer.
 	if opts.dryRun {
 		// Only the display half; the token exists for fzf, not for reading.
 		for _, row := range rows {
 			fmt.Println(display(row))
 		}
 		for _, keep := range kept {
-			fmt.Printf("kept    worktree %s (%s)\n", relativePath(keep.Path, root), keep.Reason)
+			fmt.Println(keptLine(keep, root))
+		}
+		if len(items) == 0 {
+			fmt.Println("git-reap: nothing to reap")
 		}
 		if risk != "" {
 			fmt.Println(risk)
 		}
+		return 0
+	}
+
+	if len(items) == 0 {
+		fmt.Println("git-reap: nothing to reap")
 		return 0
 	}
 

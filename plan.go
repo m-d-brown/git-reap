@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // subjectWidth is how much of a commit subject a branch row shows.
@@ -137,7 +138,9 @@ func planWorktrees(
 		items []Item
 		kept  []Kept
 	)
-	keep := func(path, why string) { kept = append(kept, Kept{Path: path, Reason: why}) }
+	keep := func(path, why string) {
+		kept = append(kept, Kept{Kind: WorktreeKind, Name: path, Reason: why})
+	}
 
 	// worktrees[0] is the main worktree, which is not ours to remove.
 	for _, worktree := range worktrees[1:] {
@@ -159,12 +162,18 @@ func planWorktrees(
 			keep(worktree.Path, "directory is gone; prune drops it")
 			continue
 		case state.Dirty:
-			keep(worktree.Path, "uncommitted changes")
+			keep(worktree.Path, uncommitted(state.DirtyCount))
 			continue
 		case worktree.Branch == "":
 			// Detached and clean: only a candidate once it has gone quiet,
 			// since there is no branch to tell us whether it is finished.
-			if state.CommittedAt >= staleBefore {
+			//
+			// Quiet means the worktree has not been used, not that the commit
+			// under it is old. Agent tooling parks these on whatever commit it
+			// branched from, so the commit date says when that ancestor was
+			// written and nothing at all about whether anyone is still working
+			// here -- reading it would offer a worktree made minutes ago.
+			if state.TouchedAt >= staleBefore {
 				keep(worktree.Path, "detached but recent")
 				continue
 			}
@@ -186,17 +195,72 @@ func planWorktrees(
 		if risky {
 			display = "only here"
 		}
+		// A detached row is offered on the strength of when it was last used, so
+		// that is the age it shows; a worktree on a branch is describing the
+		// branch's last commit, which is what its own row would say.
+		age := state.Relative
+		if worktree.Branch == "" {
+			age = state.TouchedRelative
+		}
 		items = append(items, Item{
 			Kind:   WorktreeKind,
 			Key:    worktree.Path,
 			Reason: reason,
-			Age:    state.Relative,
+			Age:    age,
 			State:  display,
 			Detail: detail,
 			Risky:  risky,
 		})
 	}
 	return items, kept
+}
+
+// pinBranches finds the candidate branches that a worktree has checked out and
+// will go on holding, because that worktree is one we are keeping.
+//
+// git refuses to delete such a branch, and execute would report it as kept once
+// the picking was over -- so leaving them in the offered list means offering
+// rows that cannot do anything, and counting deletions that will not happen.
+// They belong with the worktrees we passed over, and for the same reason.
+//
+// The explanation quotes the holding worktree's own reason rather than working
+// one out again, so the two lines of a --dry-run cannot end up disagreeing
+// about why that worktree is still there.
+func pinBranches(candidates map[string]Reason, worktrees []Worktree, kept []Kept, root string) []Kept {
+	staying := map[string]string{}
+	for _, keep := range kept {
+		if keep.Kind == WorktreeKind {
+			staying[keep.Name] = keep.Reason
+		}
+	}
+
+	var pinned []Kept
+	for _, worktree := range worktrees {
+		if worktree.Branch == "" || candidates[worktree.Branch] == "" {
+			continue
+		}
+		why, held := staying[worktree.Path]
+		if !held {
+			// The worktree is on offer too, so taking both frees the branch.
+			continue
+		}
+		pinned = append(pinned, Kept{
+			Kind:   BranchKind,
+			Name:   worktree.Branch,
+			Reason: "checked out at " + relativePath(worktree.Path, root) + ", which is kept: " + why,
+		})
+	}
+	sort.Slice(pinned, func(a, b int) bool { return pinned[a].Name < pinned[b].Name })
+	return pinned
+}
+
+// uncommitted describes how much work a dirty worktree is holding, which is the
+// difference between one stray file and an afternoon's changes.
+func uncommitted(count int) string {
+	if count == 1 {
+		return "1 uncommitted file"
+	}
+	return strconv.Itoa(count) + " uncommitted files"
 }
 
 // branchItems builds the display items for the qualifying branches, in name
@@ -257,6 +321,52 @@ func riskSummary(items []Item, base string) string {
 	}
 	return fmt.Sprintf("%d %s \"only here\": not in %s and on no remote -- deleting drops those commits",
 		count, rows, base)
+}
+
+// humanize renders a timestamp the way git renders %cr, which is what the
+// column beside it holds. A file's mtime arrives as a bare instant, with none
+// of the phrasing git hands over for free.
+func humanize(unix int64) string {
+	return humanizeSince(unix, time.Now().Unix())
+}
+
+// humanizeSince is humanize against a given now, which is what makes it
+// testable. The thresholds are git's: days up to a fortnight, then weeks, then
+// months, then years.
+func humanizeSince(unix, now int64) string {
+	if unix <= 0 {
+		return "unknown"
+	}
+	seconds := now - unix
+	if seconds < 0 {
+		seconds = 0
+	}
+	for _, unit := range []struct {
+		name string
+		size int64
+		upto int64
+	}{
+		{"second", 1, 60},
+		{"minute", 60, 3600},
+		{"hour", 3600, secondsPerDay},
+		{"day", secondsPerDay, 14 * secondsPerDay},
+		{"week", 7 * secondsPerDay, 70 * secondsPerDay},
+		{"month", 30 * secondsPerDay, 365 * secondsPerDay},
+	} {
+		if seconds < unit.upto {
+			return plural(seconds/unit.size, unit.name) + " ago"
+		}
+	}
+	return plural(seconds/(365*secondsPerDay), "year") + " ago"
+}
+
+// plural counts a unit in words: "1 day", "3 days".
+func plural(count int64, unit string) string {
+	text := strconv.FormatInt(count, 10) + " " + unit
+	if count == 1 {
+		return text
+	}
+	return text + "s"
 }
 
 // abbreviate shortens a commit sha to the length git itself tends to show.

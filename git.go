@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -75,13 +76,14 @@ func findBase(explicit string) (string, string) {
 	return "", "nothing matched: no origin/HEAD, and none of " + strings.Join(baseFallbacks, ", ") + " exists"
 }
 
-// gatherStates looks at each worktree on disk: does it exist, is it dirty, how
-// old is its last commit, and is its HEAD already in base.
+// gatherStates looks at each worktree on disk: does it exist, how much is
+// uncommitted, how old is its last commit, when was it last used, and is its
+// HEAD already in base.
 func gatherStates(worktrees []Worktree, base string) map[string]State {
 	states := make(map[string]State, len(worktrees))
 	for _, worktree := range worktrees {
 		if info, err := os.Stat(worktree.Path); err != nil || !info.IsDir() {
-			states[worktree.Path] = State{Relative: "gone"}
+			states[worktree.Path] = State{Relative: "gone", TouchedRelative: "gone"}
 			continue
 		}
 		stamp := gitTry("-C", worktree.Path, "log", "-1", "--format=%ct%x1f%cr")
@@ -90,25 +92,61 @@ func gatherStates(worktrees []Worktree, base string) map[string]State {
 		if relative == "" {
 			relative = "unknown"
 		}
+		dirty := len(lines(gitTry("-C", worktree.Path, "status", "--porcelain")))
+		touchedAt := lastUsed(worktree.Path, committedAt)
 		states[worktree.Path] = State{
-			Exists:      true,
-			Dirty:       gitTry("-C", worktree.Path, "status", "--porcelain") != "",
-			CommittedAt: committedAt,
-			Relative:    relative,
-			InBase:      gitSucceeds("merge-base", "--is-ancestor", worktree.Head, base),
+			Exists:          true,
+			DirtyCount:      dirty,
+			Dirty:           dirty > 0,
+			CommittedAt:     committedAt,
+			Relative:        relative,
+			TouchedAt:       touchedAt,
+			TouchedRelative: humanize(touchedAt),
+			InBase:          gitSucceeds("merge-base", "--is-ancestor", worktree.Head, base),
 		}
 	}
 	return states
 }
 
-// worktreeHolding returns the path of the worktree that has branch checked out.
-func worktreeHolding(branch string) string {
-	for _, worktree := range parseWorktrees(gitTry("worktree", "list", "--porcelain")) {
+// lastUsed is when this worktree was last checked out or committed on, which is
+// the honest measure of whether it has been abandoned. It falls back to the
+// commit date when the files it reads are unavailable.
+//
+// The signal is the mtime of HEAD in the worktree's own admin directory, and
+// the choice of file matters. The obvious candidate, the index, is no good:
+// `git status` rewrites it to refresh cached stat information, so gatherStates
+// above would touch every worktree it looked at and then find them all fresh.
+// Nothing but a checkout writes HEAD -- and on a detached worktree HEAD holds
+// the raw sha rather than a ref, so committing rewrites it too, which is
+// exactly the activity worth noticing on the worktrees this rule is for.
+func lastUsed(path string, committedAt int64) int64 {
+	if admin := gitTry("-C", path, "rev-parse", "--absolute-git-dir"); admin != "" {
+		if info, err := os.Stat(filepath.Join(admin, "HEAD")); err == nil {
+			return info.ModTime().Unix()
+		}
+	}
+	// A worktree whose admin directory we cannot read still has a directory of
+	// its own, whose mtime moves when files are added or removed at the top.
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime().Unix()
+	}
+	return committedAt
+}
+
+// holderOf returns the path of the worktree that has branch checked out.
+func holderOf(branch string, worktrees []Worktree) string {
+	for _, worktree := range worktrees {
 		if worktree.Branch == branch {
 			return worktree.Path
 		}
 	}
 	return ""
+}
+
+// worktreeHolding is holderOf for the caller with no listing to hand: the
+// --preview process, which is a fresh run given nothing but a token.
+func worktreeHolding(branch string) string {
+	return holderOf(branch, parseWorktrees(gitTry("worktree", "list", "--porcelain")))
 }
 
 // execute removes the selected worktrees, then deletes the selected branches.

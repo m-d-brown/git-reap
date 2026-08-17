@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,17 @@ func relativePath(path, root string) string {
 		return path
 	}
 	return relative
+}
+
+// keptLine renders one thing we passed over, and why. The kind is padded to the
+// width of the longer of the two so that a run keeping both branches and
+// worktrees still lines its names up.
+func keptLine(keep Kept, root string) string {
+	name := keep.Name
+	if keep.Kind == WorktreeKind {
+		name = relativePath(name, root)
+	}
+	return fmt.Sprintf("kept    %-8s %s (%s)", string(keep.Kind), name, keep.Reason)
 }
 
 // display drops the token from a row, leaving the half meant to be read.

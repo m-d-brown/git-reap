@@ -106,10 +106,26 @@ func TestClassifyBranches(t *testing.T) {
 
 func TestPlanWorktrees(t *testing.T) {
 	mainWorktree := Worktree{"/repo", "aaa", "main", false}
-	// InBase: the ordinary case, where the worktree's commits are in the base
-	// already. The tests that care about the other case say so.
+	// The ordinary case: the worktree's commits are in the base already, and it
+	// was last used when that commit was written. The tests that care about
+	// either of those coming apart say so.
 	state := func(exists, dirty bool, committedAt int64) State {
-		return State{exists, dirty, committedAt, "1 day ago", true}
+		count := 0
+		if dirty {
+			count = 3
+		}
+		return State{
+			Exists: exists, DirtyCount: count, Dirty: dirty,
+			CommittedAt: committedAt, Relative: "1 day ago",
+			TouchedAt: committedAt, TouchedRelative: "1 day ago",
+			InBase: true,
+		}
+	}
+	// outsideBase is the same worktree with its HEAD not contained in the base,
+	// so removing it would orphan whatever it points at.
+	outsideBase := func(s State) State {
+		s.InBase = false
+		return s
 	}
 	const staleBefore = 50
 
@@ -151,7 +167,7 @@ func TestPlanWorktrees(t *testing.T) {
 		// row carries whatever risk it has.
 		items, _ := plan(
 			Worktree{"/wt", "bbb", "done", false},
-			State{true, false, 100, "1 day ago", false},
+			outsideBase(state(true, false, 100)),
 			map[string]Reason{"done": Merged},
 			"/repo",
 		)
@@ -187,12 +203,41 @@ func TestPlanWorktrees(t *testing.T) {
 		// what orphans them.
 		items, _ := plan(
 			Worktree{"/wt", "0123456789abcdef", "", false},
-			State{true, false, 10, "1 day ago", false},
+			outsideBase(state(true, false, 10)),
 			nil,
 			"/repo",
 		)
 		if len(items) != 1 || !items[0].Risky || items[0].State != "only here" {
 			t.Errorf("items = %+v, want a risky item", items)
+		}
+	})
+
+	// The two clocks a detached worktree has are the commit under it and the
+	// worktree itself, and only the second one answers "is anyone still working
+	// here". Agent tooling parks worktrees on whatever commit it branched from,
+	// so the first is routinely ancient on a worktree made minutes ago.
+	t.Run("a fresh detached worktree on an old commit is kept", func(t *testing.T) {
+		parked := state(true, false, 10)
+		parked.TouchedAt, parked.TouchedRelative = 100, "1 minute ago"
+		items, kept := plan(Worktree{"/wt", "abc", "", false}, parked, nil, "/repo")
+		if len(items) != 0 {
+			t.Errorf("items = %+v, want nothing: the worktree is in use", items)
+		}
+		if len(kept) != 1 || kept[0].Reason != "detached but recent" {
+			t.Errorf("kept = %+v, want it kept as recent", kept)
+		}
+	})
+
+	t.Run("an abandoned detached worktree on a new commit is offered", func(t *testing.T) {
+		abandoned := state(true, false, 100)
+		abandoned.TouchedAt, abandoned.TouchedRelative = 10, "6 months ago"
+		items, _ := plan(Worktree{"/wt", "abc", "", false}, abandoned, nil, "/repo")
+		if len(items) != 1 || items[0].Reason != Detached {
+			t.Fatalf("items = %+v, want it offered as detached", items)
+		}
+		// The age shown is the one the decision turned on.
+		if items[0].Age != "6 months ago" {
+			t.Errorf("Age = %q, want the last-used age", items[0].Age)
 		}
 	})
 
@@ -209,7 +254,7 @@ func TestPlanWorktrees(t *testing.T) {
 			worktree: Worktree{"/wt", "abc", "", false},
 			state:    state(true, false, 100),
 			current:  "/repo",
-			want:     Kept{"/wt", "detached but recent"},
+			want:     Kept{WorktreeKind, "/wt", "detached but recent"},
 		},
 		{
 			name:       "dirty worktree is kept",
@@ -217,7 +262,7 @@ func TestPlanWorktrees(t *testing.T) {
 			state:      state(true, true, 100),
 			candidates: map[string]Reason{"done": Merged},
 			current:    "/repo",
-			want:       Kept{"/wt", "uncommitted changes"},
+			want:       Kept{WorktreeKind, "/wt", "3 uncommitted files"},
 		},
 		{
 			name:       "locked worktree is kept",
@@ -225,7 +270,7 @@ func TestPlanWorktrees(t *testing.T) {
 			state:      state(true, false, 100),
 			candidates: map[string]Reason{"done": Merged},
 			current:    "/repo",
-			want:       Kept{"/wt", "locked"},
+			want:       Kept{WorktreeKind, "/wt", "locked"},
 		},
 		{
 			name:       "current worktree is kept",
@@ -233,7 +278,7 @@ func TestPlanWorktrees(t *testing.T) {
 			state:      state(true, false, 100),
 			candidates: map[string]Reason{"done": Merged},
 			current:    "/wt",
-			want:       Kept{"/wt", "current"},
+			want:       Kept{WorktreeKind, "/wt", "current"},
 		},
 		{
 			name:       "missing directory is left to prune",
@@ -241,7 +286,7 @@ func TestPlanWorktrees(t *testing.T) {
 			state:      state(false, false, 100),
 			candidates: map[string]Reason{"done": Merged},
 			current:    "/repo",
-			want:       Kept{"/wt", "directory is gone; prune drops it"},
+			want:       Kept{WorktreeKind, "/wt", "directory is gone; prune drops it"},
 		},
 		{
 			// prune skips locked worktrees, so a locked entry survives even
@@ -250,14 +295,14 @@ func TestPlanWorktrees(t *testing.T) {
 			worktree: Worktree{"/wt", "b", "done", true},
 			state:    state(false, false, 100),
 			current:  "/repo",
-			want:     Kept{"/wt", "locked"},
+			want:     Kept{WorktreeKind, "/wt", "locked"},
 		},
 		{
 			name:     "worktree on a branch still in use is kept",
 			worktree: Worktree{"/wt", "b", "active", false},
 			state:    state(true, false, 100),
 			current:  "/repo",
-			want:     Kept{"/wt", "active still in use"},
+			want:     Kept{WorktreeKind, "/wt", "active still in use"},
 		},
 	}
 
@@ -272,6 +317,102 @@ func TestPlanWorktrees(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPinBranches(t *testing.T) {
+	mainWorktree := Worktree{"/repo", "aaa", "main", false}
+	holder := Worktree{"/repo/wt", "bbb", "done", false}
+	candidates := map[string]Reason{"done": Merged}
+
+	t.Run("a branch held by a kept worktree is pinned", func(t *testing.T) {
+		kept := []Kept{{WorktreeKind, "/repo/wt", "3 uncommitted files"}}
+		got := pinBranches(candidates, []Worktree{mainWorktree, holder}, kept, "/repo")
+		want := []Kept{{BranchKind, "done", "checked out at wt, which is kept: 3 uncommitted files"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("pinBranches = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("a branch whose worktree is offered stays a candidate", func(t *testing.T) {
+		// Taking both rows frees the branch, so it is a real choice to offer.
+		if got := pinBranches(candidates, []Worktree{mainWorktree, holder}, nil, "/repo"); len(got) != 0 {
+			t.Errorf("pinBranches = %+v, want nothing", got)
+		}
+	})
+
+	t.Run("a branch no worktree holds is untouched", func(t *testing.T) {
+		kept := []Kept{{WorktreeKind, "/repo/other", "locked"}}
+		other := Worktree{"/repo/other", "ccc", "unrelated", false}
+		if got := pinBranches(candidates, []Worktree{mainWorktree, other}, kept, "/repo"); len(got) != 0 {
+			t.Errorf("pinBranches = %+v, want nothing", got)
+		}
+	})
+
+	t.Run("a worktree holding something we were not offering is ignored", func(t *testing.T) {
+		kept := []Kept{{WorktreeKind, "/repo/wt", "locked"}}
+		active := Worktree{"/repo/wt", "bbb", "active", false}
+		if got := pinBranches(candidates, []Worktree{mainWorktree, active}, kept, "/repo"); len(got) != 0 {
+			t.Errorf("pinBranches = %+v, want nothing", got)
+		}
+	})
+
+	t.Run("the reason quotes whatever kept the worktree", func(t *testing.T) {
+		kept := []Kept{{WorktreeKind, "/repo/wt", "locked"}}
+		got := pinBranches(candidates, []Worktree{mainWorktree, holder}, kept, "/repo")
+		if len(got) != 1 || !strings.HasSuffix(got[0].Reason, "which is kept: locked") {
+			t.Errorf("pinBranches = %+v, want the holder's own reason", got)
+		}
+	})
+}
+
+func TestUncommitted(t *testing.T) {
+	if got := uncommitted(1); got != "1 uncommitted file" {
+		t.Errorf("uncommitted(1) = %q", got)
+	}
+	if got := uncommitted(3); got != "3 uncommitted files" {
+		t.Errorf("uncommitted(3) = %q", got)
+	}
+}
+
+func TestHumanizeSince(t *testing.T) {
+	const now = 1_000_000_000
+	tests := []struct {
+		seconds int64
+		want    string
+	}{
+		{0, "0 seconds ago"},
+		{1, "1 second ago"},
+		{45, "45 seconds ago"},
+		{60, "1 minute ago"},
+		{3599, "59 minutes ago"},
+		{3600, "1 hour ago"},
+		{5 * 3600, "5 hours ago"},
+		{secondsPerDay, "1 day ago"},
+		{13 * secondsPerDay, "13 days ago"},
+		{14 * secondsPerDay, "2 weeks ago"},
+		{69 * secondsPerDay, "9 weeks ago"},
+		{70 * secondsPerDay, "2 months ago"},
+		{364 * secondsPerDay, "12 months ago"},
+		{365 * secondsPerDay, "1 year ago"},
+		{800 * secondsPerDay, "2 years ago"},
+	}
+	for _, test := range tests {
+		if got := humanizeSince(now-test.seconds, now); got != test.want {
+			t.Errorf("humanizeSince(-%ds) = %q, want %q", test.seconds, got, test.want)
+		}
+	}
+
+	t.Run("a timestamp we could not read is unknown", func(t *testing.T) {
+		if got := humanizeSince(0, now); got != "unknown" {
+			t.Errorf("humanizeSince(0) = %q, want unknown", got)
+		}
+	})
+
+	t.Run("a clock skewed into the future reads as now", func(t *testing.T) {
+		if got := humanizeSince(now+500, now); got != "0 seconds ago" {
+			t.Errorf("humanizeSince(future) = %q", got)
+		}
+	})
 }
 
 func TestBranchItems(t *testing.T) {
