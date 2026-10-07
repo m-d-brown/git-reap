@@ -224,9 +224,9 @@ origin/main  origin/HEAD, the default branch this clone recorded
 
 ## worktrees
 path                            on                    state                                 last commit   last used       outcome
-.                               main                  dirty (2 uncommitted files), in base  5 weeks ago   23 seconds ago  the main worktree, never removed
+.                               main                  dirty (2 uncommitted files), in base  7 days ago    23 seconds ago  the main worktree, never removed
 .claude/worktrees/agent-7f21e0  detached at 614b44f5  clean, not in base                    6 months ago  6 months ago    offered (detached)
-.claude/worktrees/agent-e5a018  detached at 30fc51d1  clean, in base                        5 weeks ago   23 seconds ago  kept: detached but recent
+.claude/worktrees/agent-e5a018  detached at 30fc51d1  clean, in base                        7 days ago    23 seconds ago  kept: detached but recent
 worktrees/invoice-pdf           feature/invoice-pdf   dirty (3 uncommitted files), in base  2 weeks ago   23 seconds ago  kept: 3 uncommitted files
 
 ## branches

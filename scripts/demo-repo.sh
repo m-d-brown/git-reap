@@ -95,6 +95,14 @@ git push -q -u origin main
 # clone of a repository with commits in it would have.
 git remote set-head origin -a
 
+# The squash merges come first, and the older of the two first, because main is
+# built in call order while the commits are back-dated: landing them last filed
+# a five-week-old commit above a seven-day-old one in every history the
+# screenshot shows. Going first also leaves the base moving on underneath them
+# afterwards, which is the case `git merge-tree` has to survive.
+squash feature/rate-limits "feat(api): per-token rate limits" 34
+squash fix/login-redirect "fix(auth): keep the redirect target across SSO" 21
+
 land feature/avatar-upload "feat(profile): upload and crop avatars" 12
 land chore/bump-deps "chore: bump axios, vite, and typescript" 5
 land feature/csv-export "feat(reports): export a run as CSV" 9
@@ -102,9 +110,6 @@ land feature/csv-export "feat(reports): export a run as CSV" 9
 land feature/invoice-pdf "feat(billing): render an invoice as PDF" 16
 
 land_unpushed fix/session-timeout "fix(auth): stop refreshing an expired session" 7
-
-squash fix/login-redirect "fix(auth): keep the redirect target across SSO" 21
-squash feature/rate-limits "feat(api): per-token rate limits" 34
 
 abandon spike/graphql-gateway "spike: sketch a graphql gateway in front of the REST api" 190
 abandon wip/flaky-scheduler-test "wip: try to reproduce the flaky scheduler test" 145
