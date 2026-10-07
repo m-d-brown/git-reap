@@ -105,11 +105,24 @@ def capture(command, cwd):
 
 
 def runs(line):
-    """Split one screen row into (start, end, style, text) runs of one style."""
+    """Split one screen row into (start, end, style, text) runs of one style.
+
+    A blank cell shows its background and nothing else, so its foreground is
+    collapsed to the default before the comparison. That is not a cosmetic
+    nicety: fzf repaints its preview border asynchronously, and the blank beside
+    it ends up carrying the border's colour or the pane's depending on when the
+    capture stopped reading. Splitting on a colour nobody can see made the same
+    screen draw two different pictures, which is the one thing this has to not
+    do. Under reverse video the foreground is the background, so that case keeps
+    every attribute it has.
+    """
     start, style, text = 0, None, ""
     for column in range(COLUMNS):
         cell = line[column]
-        here = (cell.fg, cell.bg, cell.bold, cell.reverse)
+        if (cell.data or " ") == " " and not cell.reverse:
+            here = ("default", cell.bg, False, False)
+        else:
+            here = (cell.fg, cell.bg, cell.bold, cell.reverse)
         if here != style:
             if style is not None:
                 yield start, column, style, text

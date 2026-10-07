@@ -33,6 +33,8 @@ cat << 'EOF'
 
 Ready.
 
-    scripts/screenshot.sh    redraw docs/screenshot.png
-    go test ./...            unit tests, plus the integration test
+    make check         gofmt, vet, and tests -- exactly what CI runs
+    make screenshot    redraw docs/screenshot.png and docs/screenshot-warning.png
+
+Redrawing is a deliberate act: see AGENTS.md for when it is called for.
 EOF

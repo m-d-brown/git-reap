@@ -6,7 +6,8 @@
 #
 # Commit dates are set relative to today, so the ages in the screenshot ("3
 # weeks ago", "6 months ago") stay put no matter when it is regenerated. The
-# commit hashes do move, since they hash those dates.
+# commit hashes hold still within the day and move when it rolls over, since
+# they hash those dates.
 set -euo pipefail
 
 ROOT=${1:?usage: demo-repo.sh <directory>}
@@ -21,7 +22,23 @@ export GIT_COMMITTER_NAME="Ada Lovelace" GIT_COMMITTER_EMAIL=ada@example.com
 
 REMOTE=$ROOT/origin.git
 WORK=$ROOT/checkout-service
-NOW=$(date +%s)
+# The clock everything here is dated against, truncated to the UTC day rather
+# than taken to the second: two runs on the same day then build byte-identical
+# commits, and so byte-identical screenshots. That is what makes `make
+# screenshot` safe to run whenever you are unsure -- a redraw with nothing
+# behind it leaves docs/ untouched, instead of a megabyte of new PNG whose only
+# change is the hashes. git truncates when it renders an age too, so nothing on
+# screen moves within the day. Arithmetic rather than `date -d`, which macOS
+# does not have.
+#
+# Tied to today rather than frozen at some memorable constant, because the
+# shapes below are defined against the real clock and not against this one:
+# `unused` means no commit in the last 90 days, measured when git-reap runs.
+# Freeze this far enough back and feature/billing-portal goes idle and starts
+# being offered; freeze it forward and nothing is ever stale, so the detached
+# worktrees and both spikes stop being offered at all -- spike/graphql-gateway
+# among them, which is the entire subject of docs/screenshot-warning.png.
+NOW=$(( $(date +%s) / 86400 * 86400 ))
 
 git init -q --bare -b main "$REMOTE"
 git clone -q "$REMOTE" "$WORK"

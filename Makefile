@@ -9,10 +9,10 @@
 DEMO_DIR ?= /tmp/git-reap-demo
 
 .DEFAULT_GOAL := help
-.PHONY: help check fmt vet test build demo clean
+.PHONY: help check fmt vet test build demo screenshot clean
 
 help: ## List these targets
-	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-7s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 check: fmt vet test ## gofmt, vet, and tests -- exactly what CI runs
 
@@ -40,6 +40,9 @@ demo: build ## Build a repository with one of everything, to try the picker agai
 	@echo
 	@echo "    cd $(DEMO_DIR)/checkout-service"
 	@echo "    $(CURDIR)/git-reap --debug --no-fetch"
+
+screenshot: ## Redraw docs/*.png from a fresh demo repository
+	@scripts/screenshot.sh
 
 clean: ## Remove the built binary and the demo repository
 	rm -f git-reap

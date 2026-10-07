@@ -257,9 +257,10 @@ which is what most abandoned work actually looks like.
 ## Development
 
 ```sh
-make check    # gofmt, vet, and tests -- exactly what CI runs
-make          # list every target
-make demo     # a repository with one of everything, to try the picker against
+make check       # gofmt, vet, and tests -- exactly what CI runs
+make             # list every target
+make demo        # a repository with one of everything, to try the picker against
+make screenshot  # redraw docs/*.png
 ```
 
 `make check` is the whole gate: CI runs that target rather than its own copy of
@@ -275,18 +276,32 @@ door standing in for the remote, so the fetch is real but offline.
 The screenshots above are not mockups, and they are not hand-maintained:
 
 ```sh
-scripts/screenshot.sh
+make screenshot
 ```
 
 builds the binary, builds a demo repository with something of each kind left
 lying around in it (`scripts/demo-repo.sh`), and runs the real picker against
 that in a pty twice, drawing each screen it left behind (`scripts/capture.py`)
-into `docs/screenshot.png` and `docs/screenshot-warning.png`. Commit dates in
-the demo are relative to today, so the ages hold still between runs; the
-hashes move, because they hash those dates. Needs `fzf`, `rsvg-convert`, and
-`python3` with [pyte](https://pypi.org/project/pyte/).
+into `docs/screenshot.png` and `docs/screenshot-warning.png`. Needs `fzf`,
+`rsvg-convert`, and `python3` with [pyte](https://pypi.org/project/pyte/).
 
-Rather than installing those, open the repository in a Dev Containers-capable
+Redraw them in the same commit as anything that changes what the picker puts on
+screen — a column, a reason, a preview line, or the demo repository itself.
+Nothing enforces that, deliberately: a hook that redrew on every commit would
+spend five seconds and a megabyte of PNG on commits that moved no pixel.
+`AGENTS.md` states the rule for anyone, human or otherwise, working here.
+
+Running it when you are unsure is free, though, because a redraw is
+reproducible. The demo repository dates its commits against the current UTC day
+rather than the current second, so two redraws on the same day produce identical
+bytes and `git status` stays empty unless the picture really moved. The ages
+hold still because they are measured from today — freeze that clock at a fixed
+date and the demo stops meaning what it says, since `unused` is "no commit in 90
+days" measured against the real one, and a demo dated far enough ahead offers no
+idle branches at all. The hashes do move when the day rolls over, because they
+hash those dates.
+
+Rather than installing the tools, open the repository in a Dev Containers-capable
 editor and let `.devcontainer/` supply them. It pins them to what Debian
 stable ships, so the picture does not drift when `fzf` cuts a release, and it
 installs a monospace font for `rsvg-convert` to draw with — without one the
