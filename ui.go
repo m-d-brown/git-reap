@@ -162,6 +162,12 @@ func whereTheCommitsLive(rev, upstream, track, base string) string {
 	if gitSucceeds("merge-base", "--is-ancestor", rev, base) {
 		return "in " + base + "; deleting drops nothing"
 	}
+	// The row already said so by not reading "only here"; this is the pane
+	// saying why, since the history below it shows commits that base lacks.
+	if landedIn(rev, base, treeOf(base)) {
+		return "changes already in " + base + " under other commits (squash-merged, rebased, " +
+			"or cherry-picked); deleting drops nothing"
+	}
 	pushed := upstream != "" && !strings.Contains(track, "gone")
 	if pushed && unpushed(track) == 0 {
 		return "not in " + base + ", but pushed to " + upstream

@@ -60,14 +60,25 @@ land_unpushed() {
   git merge -q "$1"
 }
 
-# squash <branch> <subject> <days-ago>: pushed, then deleted on the remote,
-# which is what a squash-merged and closed pull request leaves behind -- the
-# local branch tracks an upstream that is gone, and is not merged.
+# squash <branch> <subject> <days-ago>: pushed, landed on main as one new
+# commit, then deleted on the remote -- what "Squash and merge" leaves behind.
+# The local branch tracks an upstream that is gone, and its own commit is in no
+# other branch, but everything it changed is in main.
+#
+# The pull request number on the squash commit is what GitHub adds, and it is
+# also load-bearing: a one-commit branch squashed on the same parent at the same
+# instant with the same subject hashes to the very commit it was squashed from,
+# which would leave it merged in the ordinary way.
+PR=40
 squash() {
+  local when="@$((NOW - $3 * 86400)) +0000"
+  PR=$((PR + 1))
   git checkout -q -b "$1"
   commit "$2" "$3"
   git push -q -u origin "$1"
   git checkout -q main
+  git merge -q --squash "$1"
+  GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" git commit -qm "$2 (#$PR)"
   git push -q origin --delete "$1"
 }
 

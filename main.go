@@ -1,11 +1,14 @@
 // Command git-reap deletes branches that are done with, and the worktrees
 // sitting on them.
 //
-// Four things qualify for deletion:
+// Five things qualify for deletion:
 //
 //	merged         a branch already contained in the base branch
+//	squash-merged  a branch whose changes are in the base under other commits
+//	               -- squash-merged, rebased, or cherry-picked -- so that
+//	               merging it would change nothing
 //	upstream gone  a branch whose remote branch was deleted -- what a
-//	               squash-merged and closed pull request leaves behind
+//	               merged and closed pull request leaves behind
 //	unused         a branch with no commits in the last --days days
 //	detached       a clean worktree on a detached HEAD, untouched for --days
 //	               days, which is what agent tooling under .claude/worktrees
@@ -20,7 +23,8 @@
 // By default the candidates go through fzf so you can pick: each row carries
 // the age, where its commits live, and the last commit subject, and the preview
 // pane shows the recent history. A row reading "only here" is one whose commits
-// are in neither the base nor any remote, so deleting it really does drop them;
+// are in neither the base nor any remote, and whose changes are not in the base
+// either, so deleting it really does drop them;
 // the header, the confirmation, and --dry-run all count those. Without fzf, use
 // --dry-run to look and --all to take everything.
 //
@@ -47,7 +51,7 @@ const (
 // line, which reads badly when each option has both a short and a long name.
 const usage = `usage: git reap [options] [base]
 
-Delete merged, gone, and unused branches and their worktrees.
+Delete merged, squash-merged, gone, and unused branches and their worktrees.
 
   base            branch to measure 'merged' against (default: origin/HEAD,
                   falling back to origin/main, origin/master, main, master)
@@ -173,7 +177,10 @@ func reap(argv []string) int {
 		return fail(err)
 	}
 	worktrees := parseWorktrees(porcelain)
-	states := gatherStates(worktrees, base)
+	// What "merging would change nothing" is measured against: a squash-merged
+	// branch merges into exactly this tree.
+	baseTree := treeOf(base)
+	states := gatherStates(worktrees, base, baseTree)
 
 	mergedOutput, err := gitCapture("branch", "--merged", base, "--format=%(refname:short)")
 	if err != nil {
@@ -213,7 +220,11 @@ func reap(argv []string) int {
 	}
 	staleBefore := time.Now().Unix() - int64(opts.days)*secondsPerDay
 	branches := parseBranches(refs)
-	candidates := classifyBranches(branches, merged, protected, staleBefore)
+	// A branch that was squash-merged, rebased, or cherry-picked is not in the
+	// base by its commits however finished it is, so the branches the merge
+	// check passed over get a second look at their changes.
+	landed := landedBranches(branches, merged, base, baseTree)
+	candidates := classifyBranches(branches, merged, landed, protected, staleBefore)
 
 	root, err := gitCapture("rev-parse", "--show-toplevel")
 	if err != nil {
@@ -232,7 +243,7 @@ func reap(argv []string) int {
 	kept = append(kept, pinned...)
 
 	// Worktrees first: git refuses to delete a branch one has checked out.
-	items := append(worktreeItems, branchItems(branches, candidates, merged, mergedToHead)...)
+	items := append(worktreeItems, branchItems(branches, candidates, merged, landed, mergedToHead)...)
 
 	// Before the "nothing to reap" exit below, deliberately: a run that offers
 	// nothing when you expected something is the main thing --debug is for, and
@@ -245,7 +256,7 @@ func reap(argv []string) int {
 		reportDebug(debugState{
 			opts: opts, base: base, why: why, root: root,
 			worktrees: worktrees, states: states, branches: branches,
-			merged: merged, mergedToHead: mergedToHead, protected: protected,
+			merged: merged, landed: landed, mergedToHead: mergedToHead, protected: protected,
 			staleBefore: staleBefore, items: items, kept: kept, pinned: pins,
 		})
 		return 0

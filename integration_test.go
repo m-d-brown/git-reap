@@ -13,7 +13,7 @@ import (
 )
 
 // The fixture repository holds one of everything the tool has an opinion about:
-// a merged branch, a branch whose upstream was deleted (the squash-merge case),
+// a merged branch, a squash-merged branch, a branch whose upstream was deleted,
 // an idle branch, an active branch, and worktrees that are merged, dirty,
 // idle-detached, freshly detached, and detached on an old commit but recently
 // used. The "remote" is a bare repository next door, so the fetch is real but
@@ -158,13 +158,25 @@ func (r *repo) build() {
 
 	r.mergeIntoMain("merged-feature")
 
-	// Squash-merge stand-in: pushed, then deleted on the remote, which leaves
-	// the local branch tracking a gone upstream and unmerged.
+	// Pushed, then deleted on the remote without landing -- a pull request
+	// closed unmerged -- which leaves the local branch tracking a gone upstream,
+	// and the only copy of its commit.
 	r.git("checkout", "-qb", "gone-feature")
 	r.commit("gone.txt", "")
 	r.git("push", "-q", "-u", "origin", "gone-feature")
 	r.git("checkout", "-q", "main")
 	r.git("push", "-q", "origin", "--delete", "gone-feature")
+
+	// Squash-merged for real: two commits on the branch, landed on main as one
+	// new commit, so none of the branch's own commits are ever in the base.
+	// Merging it would change nothing, which is what makes it safe to delete --
+	// and it is recent and has no upstream, so nothing else would offer it.
+	r.git("checkout", "-qb", "squashed-feature")
+	r.commit("squashed-one.txt", "")
+	r.commit("squashed-two.txt", "")
+	r.git("checkout", "-q", "main")
+	r.git("merge", "-q", "--squash", "squashed-feature")
+	r.git("commit", "-qm", "squashed feature (#1)")
 
 	// Unmerged and untouched for years: the "unused" case.
 	r.git("checkout", "-qb", "forgotten")
@@ -556,6 +568,9 @@ func TestRowsSayWhereTheCommitsLive(t *testing.T) {
 		"unpushed-merge": "1 unpushed",
 		// In origin/main, and never had a remote branch of its own to be on.
 		"merged-feature": "no upstream",
+		// Its commits are in neither, but everything they changed is in
+		// origin/main, so nothing is lost.
+		"squashed-feature": "no upstream",
 		// In neither: these commits go when the branch does.
 		"gone-feature": "only here",
 		"forgotten":    "only here",
@@ -570,6 +585,38 @@ func TestRowsSayWhereTheCommitsLive(t *testing.T) {
 	}
 	// A merged branch is never "only here", however far its own remote lags.
 	lacks(t, rows["unpushed-merge"], "only here")
+	contains(t, rows["squashed-feature"], "squash-merged")
+	lacks(t, rows["squashed-feature"], "only here")
+}
+
+// TestASquashMergedBranchIsDeleted covers the branch `git branch --merged`
+// cannot see: recent, never pushed, and in no way contained in the base, yet
+// with every change it made already there. git's own -d refuses it, so this is
+// also the case where the -D has to be worked out from the content.
+func TestASquashMergedBranchIsDeleted(t *testing.T) {
+	r := newRepo(t)
+
+	preview := r.run("--preview", "branch:squashed-feature", "--no-fetch")
+	contains(t, preview.stdout, "changes already in origin/main", "deleting drops nothing")
+	lacks(t, preview.stdout, "only here")
+
+	got := r.runWith("", r.stubPath("branch:squashed-feature*"))
+	if got.code != 0 {
+		t.Errorf("exit code = %d, want 0\nstderr:\n%s", got.code, got.stderr)
+	}
+	if set(r.branches()...)["squashed-feature"] {
+		t.Error("squashed-feature survived being picked")
+	}
+	lacks(t, got.stderr, "not fully merged", "could not delete")
+}
+
+// A branch the base has not taken is not mistaken for one it has, which is the
+// half of the content check that keeps it from deleting work.
+func TestAnUnlandedBranchIsNotSquashMerged(t *testing.T) {
+	r := newRepo(t)
+	// active is recent, so nothing but a mistaken content check would offer it.
+	lacks(t, r.run("-n", "--no-fetch").stdout, "active")
+	contains(t, r.run("--preview", "branch:active", "--no-fetch").stdout, "only here")
 }
 
 // TestTheRiskSummaryCountsWhatWouldBeLost covers the line the picker header,
@@ -662,7 +709,11 @@ func TestDebugExplainsEveryDecisionAndChangesNothing(t *testing.T) {
 		// Each way a branch can qualify, and each way it can fail to.
 		"offered (merged)", "offered (upstream gone)", "offered (unused)",
 		"protected: the base",
-		"not merged, upstream not gone",
+		"not merged or squash-merged, upstream not gone",
+		// Squash-merged reads differently from merged in the containment column,
+		// since the branch's commits are not in the base and that is the column
+		// people check them against.
+		"offered (squash-merged)", "by content",
 		// The worktree state behind a decision, rather than just the decision.
 		"kept: 1 uncommitted file",
 		"dirty (1 uncommitted file)",

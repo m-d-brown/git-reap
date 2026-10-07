@@ -76,10 +76,55 @@ func findBase(explicit string) (string, string) {
 	return "", "nothing matched: no origin/HEAD, and none of " + strings.Join(baseFallbacks, ", ") + " exists"
 }
 
+// treeOf is the tree a commit-ish points at, or "" when it does not resolve.
+func treeOf(rev string) string {
+	return gitTry("rev-parse", "--verify", "--quiet", rev+"^{tree}")
+}
+
+// landedIn reports whether rev's changes are already in base under other
+// commits -- squash-merged, rebased, or cherry-picked -- which is the case
+// `git branch --merged` cannot see: it asks whether the commits are in base,
+// and after a squash they never will be.
+//
+// The question asked instead is whether merging rev into base would change
+// anything. merge-tree does that merge in memory, touching no worktree and no
+// index, and a merge whose tree is base's own tree is one that brings nothing.
+// Being a three-way merge rather than a comparison of files, it is not fooled
+// by base having moved on elsewhere in the same files since; base having
+// rewritten the very lines the branch changed is a conflict, and reads as not
+// landed. So does any failure at all, including a git older than 2.38, which
+// has no --write-tree: a branch this cannot vouch for keeps its "only here".
+//
+// The objects the merge writes are unreachable, and gc collects them. When the
+// branch has landed there are none, since the merged tree is base's own.
+func landedIn(rev, base, baseTree string) bool {
+	if baseTree == "" {
+		return false
+	}
+	output, err := gitCapture("merge-tree", "--write-tree", base, rev)
+	tree, _, _ := strings.Cut(output, "\n")
+	return err == nil && tree == baseTree
+}
+
+// landedBranches picks out the branches that are not merged into base but whose
+// changes are already in it. Only those: a merged branch is in base by its
+// commits, which says the same thing more cheaply.
+func landedBranches(branches []Branch, merged map[string]bool, base, baseTree string) map[string]bool {
+	landed := map[string]bool{}
+	for _, branch := range branches {
+		// The full ref, so that a tag sharing the branch's name cannot stand in
+		// for it.
+		if !merged[branch.Name] && landedIn("refs/heads/"+branch.Name, base, baseTree) {
+			landed[branch.Name] = true
+		}
+	}
+	return landed
+}
+
 // gatherStates looks at each worktree on disk: does it exist, how much is
 // uncommitted, how old is its last commit, when was it last used, and is its
-// HEAD already in base.
-func gatherStates(worktrees []Worktree, base string) map[string]State {
+// HEAD already in base, by its commits or by its changes.
+func gatherStates(worktrees []Worktree, base, baseTree string) map[string]State {
 	states := make(map[string]State, len(worktrees))
 	for _, worktree := range worktrees {
 		if info, err := os.Stat(worktree.Path); err != nil || !info.IsDir() {
@@ -94,6 +139,7 @@ func gatherStates(worktrees []Worktree, base string) map[string]State {
 		}
 		dirty := len(lines(gitTry("-C", worktree.Path, "status", "--porcelain")))
 		touchedAt := lastUsed(worktree.Path, committedAt)
+		inBase := gitSucceeds("merge-base", "--is-ancestor", worktree.Head, base)
 		states[worktree.Path] = State{
 			Exists:          true,
 			DirtyCount:      dirty,
@@ -102,7 +148,8 @@ func gatherStates(worktrees []Worktree, base string) map[string]State {
 			Relative:        relative,
 			TouchedAt:       touchedAt,
 			TouchedRelative: humanize(touchedAt),
-			InBase:          gitSucceeds("merge-base", "--is-ancestor", worktree.Head, base),
+			InBase:          inBase,
+			Landed:          !inBase && landedIn(worktree.Head, base, baseTree),
 		}
 	}
 	return states

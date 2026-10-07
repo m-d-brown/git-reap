@@ -25,6 +25,7 @@ type debugState struct {
 	states       map[string]State
 	branches     []Branch
 	merged       map[string]bool
+	landed       map[string]bool
 	mergedToHead map[string]bool
 	protected    map[string]string
 	staleBefore  int64
@@ -64,6 +65,8 @@ func reportDebug(state debugState) {
 	fmt.Fprintln(out, "## the base")
 	fmt.Fprintf(out, "%s\t%s\n", state.base, state.why)
 	fmt.Fprintln(out, "\t'merged' below means contained in this ref.")
+	fmt.Fprintln(out, "\t'by content' means not contained, but merging would change nothing:")
+	fmt.Fprintln(out, "\tsquash-merged, rebased, or cherry-picked.")
 	fmt.Fprintln(out)
 
 	reportWorktrees(out, state)
@@ -110,9 +113,12 @@ func reportWorktrees(out *tabwriter.Writer, state debugState) {
 			} else {
 				facts = append(facts, "clean")
 			}
-			if current.InBase {
+			switch {
+			case current.InBase:
 				facts = append(facts, "in base")
-			} else {
+			case current.Landed:
+				facts = append(facts, "in base by content")
+			default:
 				facts = append(facts, "not in base")
 			}
 		}
@@ -162,7 +168,7 @@ func reportBranches(out *tabwriter.Writer, state debugState) {
 		}
 
 		outcome := ""
-		reason, why := classify(branch, state.merged, state.protected, state.staleBefore)
+		reason, why := classify(branch, state.merged, state.landed, state.protected, state.staleBefore)
 		switch {
 		case reason == "":
 			outcome = why
@@ -179,8 +185,12 @@ func reportBranches(out *tabwriter.Writer, state debugState) {
 			}
 		}
 
+		inBase := yesNo(state.merged[branch.Name])
+		if state.landed[branch.Name] {
+			inBase = "by content"
+		}
 		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\n", branch.Name, upstream, track,
-			yesNo(state.merged[branch.Name]), yesNo(state.mergedToHead[branch.Name]), outcome)
+			inBase, yesNo(state.mergedToHead[branch.Name]), outcome)
 	}
 	fmt.Fprintln(out)
 }
@@ -202,8 +212,9 @@ func reportOffered(out *tabwriter.Writer, state debugState) {
 }
 
 // yesNo renders the two containment columns, which are the ones people squint
-// at: "in base" decides merged, and "in HEAD" decides whether git's own -d
-// would accept a branch that has no upstream.
+// at: "in base" decides merged -- or squash-merged, when it reads "by content"
+// instead -- and "in HEAD" decides whether git's own -d would accept a branch
+// that has no upstream.
 func yesNo(yes bool) string {
 	if yes {
 		return "yes"

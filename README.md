@@ -2,10 +2,10 @@
 
 Delete old branches, and the worktrees sitting on them.
 
-Handles several types of branches that pile up: merged, squash-merged whose
-remote branch is gone, ideas abandoned long ago, and — especially for
-agent-based development — detached worktrees like those under
-`.claude/worktrees`. `git reap` finds all four, shows you what it
+Handles several types of branches that pile up: merged, squash-merged or
+rebased, ones whose remote branch is gone, ideas abandoned long ago, and —
+especially for agent-based development — detached worktrees like those under
+`.claude/worktrees`. `git reap` finds all of them, shows you what it
 found, and deletes only what you pick using `fzf`.
 
 ![git reap picking through the candidates in a repository](docs/screenshot.png)
@@ -16,9 +16,9 @@ found, and deletes only what you pick using `fzf`.
 - **The ones agents leave behind.** Detached worktrees drifting under
   `.claude/worktrees` — what Claude Code and similar tooling leave when a task
   ends — are found by age, not by path, so any layout works.
-- **Four reasons, one pass.** Merged, upstream gone, unused, detached: the
-  squash-merged pull request and the six-month-old spike are as findable as the
-  cleanly merged branch.
+- **Five reasons, one pass.** Merged, squash-merged, upstream gone, unused,
+  detached: the squash-merged pull request and the six-month-old spike are as
+  findable as the cleanly merged branch.
 - **You pick.** Candidates go through [fzf](https://github.com/junegunn/fzf)
   with each one's recent history in the preview pane. Nothing is deleted that
   you did not mark.
@@ -39,7 +39,8 @@ found, and deletes only what you pick using `fzf`.
 | Reason          | What it means                                                                           |
 | --------------- | --------------------------------------------------------------------------------------- |
 | `merged`        | the branch is already contained in the base branch                                      |
-| `upstream gone` | the remote branch was deleted — what a squash-merged, closed pull request leaves behind |
+| `squash-merged` | the branch's changes are in the base under other commits, so merging it changes nothing |
+| `upstream gone` | the remote branch was deleted — what a merged or closed pull request leaves behind      |
 | `unused`        | no commits on the branch in the last `--days` days (90 by default)                      |
 | `detached`      | a clean worktree on a detached HEAD, untouched for `--days` days                        |
 
@@ -63,6 +64,10 @@ before you mark anything:
 | `upstream gone` | the remote branch was deleted                                                      |
 | `only here`     | in neither the base nor any remote: deleting really does drop these commits        |
 
+A squash-merged branch is never `only here`, even though its commits are on no
+remote: they go when it does, but everything they changed is already in the
+base.
+
 `only here` is the one to look at. Everything else is recoverable from somewhere
 that is not your reflog, so the preview pane spells out in red how many commits
 an `only here` row would take with it, and `--dry-run` and the `--all`
@@ -71,8 +76,8 @@ the red out of it.
 
 **Never touched:** the base branch, the branch you are on, the branch the main
 worktree holds, the main worktree itself, any worktree that is locked, has
-uncommitted changes, or is the one you are standing in. And any branch that is
-none of the four above.
+uncommitted changes, or is the one you are standing in. And any branch that
+qualifies none of the ways above.
 
 A branch that one of those worktrees has checked out is not offered either,
 however well it qualifies: git will not delete a branch out from under a
@@ -105,7 +110,7 @@ what makes the picker work; without it, `--dry-run` and `--all` still do.
 ```
 usage: git reap [options] [base]
 
-Delete merged, gone, and unused branches and their worktrees.
+Delete merged, squash-merged, gone, and unused branches and their worktrees.
 
   base            branch to measure 'merged' against (default: origin/HEAD,
                   falling back to origin/main, origin/master, main, master)
@@ -140,21 +145,21 @@ git reap develop        # measure "merged" against develop
 information is:
 
 ```
-worktree  .claude/worktrees/agent-7f21e0  detached       6 months ago  only here    detached at 614b44f5
-worktree  .claude/worktrees/agent-b3c94d  detached       5 months ago  only here    detached at 4c9bfea6
-worktree  worktrees/csv-export            merged         9 days ago    clean        feature/csv-export
-branch    chore/bump-deps                 merged         5 days ago    no upstream  chore: bump axios, vite, and typescript
-branch    feature/avatar-upload           merged         12 days ago   no upstream  feat(profile): upload and crop avatars
-branch    feature/csv-export              merged         9 days ago    no upstream  feat(reports): export a run as CSV
-branch    feature/rate-limits             upstream gone  5 weeks ago   only here    feat(api): per-token rate limits
-branch    fix/login-redirect              upstream gone  3 weeks ago   only here    fix(auth): keep the redirect target across SSO
-branch    fix/session-timeout             merged         7 days ago    1 unpushed   fix(auth): stop refreshing an expired session, se…
-branch    spike/graphql-gateway           unused         6 months ago  only here    spike: sketch a graphql gateway in front of the R…
-branch    wip/flaky-scheduler-test        unused         5 months ago  only here    wip: try to reproduce the flaky scheduler test
+worktree  .claude/worktrees/agent-7f21e0  detached       6 months ago  only here      detached at 614b44f5
+worktree  .claude/worktrees/agent-b3c94d  detached       5 months ago  only here      detached at 4c9bfea6
+worktree  worktrees/csv-export            merged         9 days ago    clean          feature/csv-export
+branch    chore/bump-deps                 merged         5 days ago    no upstream    chore: bump axios, vite, and typescript
+branch    feature/avatar-upload           merged         12 days ago   no upstream    feat(profile): upload and crop avatars
+branch    feature/csv-export              merged         9 days ago    no upstream    feat(reports): export a run as CSV
+branch    feature/rate-limits             upstream gone  5 weeks ago   upstream gone  feat(api): per-token rate limits
+branch    fix/login-redirect              upstream gone  3 weeks ago   upstream gone  fix(auth): keep the redirect target across SSO
+branch    fix/session-timeout             merged         7 days ago    1 unpushed     fix(auth): stop refreshing an expired session, se…
+branch    spike/graphql-gateway           unused         6 months ago  only here      spike: sketch a graphql gateway in front of the R…
+branch    wip/flaky-scheduler-test        unused         5 months ago  only here      wip: try to reproduce the flaky scheduler test
 kept    worktree .claude/worktrees/agent-e5a018 (detached but recent)
 kept    worktree worktrees/invoice-pdf (3 uncommitted files)
 kept    branch   feature/invoice-pdf (checked out at worktrees/invoice-pdf, which is kept: 3 uncommitted files)
-6 rows are "only here": not in origin/main and on no remote -- deleting drops those commits
+4 rows are "only here": not in origin/main and on no remote -- deleting drops those commits
 ```
 
 `fix/session-timeout` is the row worth looking twice at: it is in `origin/main`,
@@ -177,6 +182,18 @@ The base branch is `origin/HEAD` — the default branch your clone recorded. If
 your clone never recorded one, `git remote set-head origin -a` fixes that;
 failing that, `git reap` tries `origin/main`, `origin/master`, `main`, and
 `master`, and you can always name a base yourself.
+
+`merged` asks about commits, and a squash merge, a rebase, or a cherry-pick
+lands a branch's changes under new ones, so the branch is never contained in the
+base however finished it is. For the branches that are not, `git reap` asks a
+second question: would merging this branch into the base change anything? It
+does that merge in memory with `git merge-tree`, touching no worktree, and a
+branch whose merge comes out as exactly the base's tree is `squash-merged`.
+Being a real three-way merge, it is not fooled by the base having moved on
+elsewhere since. If the base has since rewritten the very lines the branch
+changed, the merge conflicts and the branch stays unproven: whether a reworded
+version upstream supersedes it is a call for a person. This needs git 2.38 or
+newer; an older git simply never finds a branch squash-merged.
 
 Branches go out with `git branch -d` wherever git will accept it, so git keeps
 the last word, and with `-D` where it would not. Which one that is cannot be
@@ -202,20 +219,22 @@ sit, and an explanation for every branch that was passed over.
 ## the base
 origin/main  origin/HEAD, the default branch this clone recorded
              'merged' below means contained in this ref.
+             'by content' means not contained, but merging would change nothing:
+             squash-merged, rebased, or cherry-picked.
 
 ## worktrees
 path                            on                    state                                 last commit   last used       outcome
-.                               main                  dirty (2 uncommitted files), in base  7 days ago    23 seconds ago  the main worktree, never removed
+.                               main                  dirty (2 uncommitted files), in base  5 weeks ago   23 seconds ago  the main worktree, never removed
 .claude/worktrees/agent-7f21e0  detached at 614b44f5  clean, not in base                    6 months ago  6 months ago    offered (detached)
-.claude/worktrees/agent-e5a018  detached at 30fc51d1  clean, in base                        7 days ago    23 seconds ago  kept: detached but recent
+.claude/worktrees/agent-e5a018  detached at 30fc51d1  clean, in base                        5 weeks ago   23 seconds ago  kept: detached but recent
 worktrees/invoice-pdf           feature/invoice-pdf   dirty (3 uncommitted files), in base  2 weeks ago   23 seconds ago  kept: 3 uncommitted files
 
 ## branches
-branch                  upstream                    track   in base  in HEAD  outcome
-feature/billing-portal  none                        -       no       no       not merged, upstream not gone, last commit 24 hours ago
-feature/invoice-pdf     none                        -       yes      yes      kept (merged): checked out at worktrees/invoice-pdf, which is kept: 3 uncommitted files
-feature/rate-limits     origin/feature/rate-limits  [gone]  no       no       offered (upstream gone)
-main                    origin/main                 -       yes      yes      protected: the base
+branch                  upstream                    track   in base     in HEAD  outcome
+feature/billing-portal  none                        -       no          no       not merged or squash-merged, upstream not gone, last commit 24 hours ago
+feature/invoice-pdf     none                        -       yes         yes      kept (merged): checked out at worktrees/invoice-pdf, which is kept: 3 uncommitted files
+feature/rate-limits     origin/feature/rate-limits  [gone]  by content  no       offered (upstream gone)
+main                    origin/main                 -       yes         yes      protected: the base
 ```
 
 The base is worth reading first: a clone with no `origin/HEAD` falls back to
@@ -231,9 +250,9 @@ different here.
 Worktrees are first-class. Operating on branches alone leaves the worktree on
 disk and, because git will not delete a branch a worktree has checked out,
 sometimes leaves the branch too. And a branch does not have to be
-merged to be finished: `git reap` also takes the squash-merged branch whose
-upstream is gone, and the branch nobody has touched in three months, which is
-what most abandoned work actually looks like.
+merged to be finished: `git reap` also takes the squash-merged branch, whether
+or not its upstream is gone, and the branch nobody has touched in three months,
+which is what most abandoned work actually looks like.
 
 ## Development
 
@@ -247,8 +266,8 @@ make demo     # a repository with one of everything, to try the picker against
 the steps, so passing it here is passing it there.
 
 The integration test builds the binary and runs it against a temporary
-repository holding one of everything — a merged branch, a squash-merged branch
-whose upstream is gone, an idle branch, an active branch, and worktrees that are
+repository holding one of everything — a merged branch, a squash-merged branch,
+a branch whose upstream is gone, an idle branch, an active branch, and worktrees that are
 merged, dirty, idle-detached, freshly detached, and detached on an old commit
 but recently used — with a bare repository next
 door standing in for the remote, so the fetch is real but offline.

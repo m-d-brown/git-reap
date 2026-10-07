@@ -18,14 +18,19 @@ const subjectWidth = 50
 // The order matters, because a branch can qualify several ways over and the
 // reason is what the row reports: an upstream that was deleted says more about
 // why the branch is finished than the merge does, and both say more than the
-// branch merely having gone quiet.
+// branch merely having gone quiet. Squash-merged comes after merged because it
+// is the same claim proven the expensive way: landed is only worked out for
+// branches the merge check passed over.
 //
 // The explanation is the half --debug prints. It comes from here, rather than
 // from a second pass that re-derives it, so that what --debug says about a
 // branch cannot drift from what actually happened to it. protected maps a
 // branch name to the reason it is untouchable, which is why it is not a plain
 // set: "why is main never offered" deserves an answer.
-func classify(branch Branch, merged map[string]bool, protected map[string]string, staleBefore int64) (Reason, string) {
+//
+// merged holds the branches whose commits are in the base, and landed the ones
+// whose changes are, though their commits are not.
+func classify(branch Branch, merged, landed map[string]bool, protected map[string]string, staleBefore int64) (Reason, string) {
 	switch {
 	case protected[branch.Name] != "":
 		return "", "protected: " + protected[branch.Name]
@@ -33,18 +38,20 @@ func classify(branch Branch, merged map[string]bool, protected map[string]string
 		return Gone, ""
 	case merged[branch.Name]:
 		return Merged, ""
+	case landed[branch.Name]:
+		return Squashed, ""
 	case branch.CommittedAt < staleBefore:
 		return Unused, ""
 	default:
-		return "", "not merged, upstream not gone, last commit " + branch.Relative
+		return "", "not merged or squash-merged, upstream not gone, last commit " + branch.Relative
 	}
 }
 
 // classifyBranches picks out the branches that qualify, mapped to why they do.
-func classifyBranches(branches []Branch, merged map[string]bool, protected map[string]string, staleBefore int64) map[string]Reason {
+func classifyBranches(branches []Branch, merged, landed map[string]bool, protected map[string]string, staleBefore int64) map[string]Reason {
 	candidates := map[string]Reason{}
 	for _, branch := range branches {
-		if reason, _ := classify(branch, merged, protected, staleBefore); reason != "" {
+		if reason, _ := classify(branch, merged, landed, protected, staleBefore); reason != "" {
 			candidates[branch.Name] = reason
 		}
 	}
@@ -76,6 +83,11 @@ func needsForce(branch Branch, mergedToHead map[string]bool) bool {
 // else: not in the base, and not on a remote branch either. It is the state
 // worth being loud about, and it is not the state that needs -D -- a merged
 // branch can need forcing and still be perfectly safe to delete.
+//
+// inBase is true for a squash-merged branch as well as a merged one. Its
+// commits really are only here, but everything they changed is in the base,
+// and calling that "only here" is what had every squash-merged pull request
+// shouting in red.
 func onlyHere(branch Branch, inBase bool) bool {
 	if inBase {
 		return false
@@ -178,8 +190,10 @@ func planWorktrees(
 				continue
 			}
 			// Nothing but this worktree points at these commits, so removing it
-			// is what orphans them.
-			reason, detail, risky = Detached, "detached at "+abbreviate(worktree.Head), !state.InBase
+			// is what orphans them -- which costs nothing when their changes
+			// have landed in the base some other way.
+			reason, detail = Detached, "detached at "+abbreviate(worktree.Head)
+			risky = !state.InBase && !state.Landed
 		default:
 			qualifying, ok := candidates[worktree.Branch]
 			if !ok {
@@ -264,10 +278,11 @@ func uncommitted(count int) string {
 }
 
 // branchItems builds the display items for the qualifying branches, in name
-// order. merged says which branches are contained in the base, and mergedToHead
-// which are contained in HEAD; between them they settle how a branch is
-// deleted and whether deleting it can lose anything.
-func branchItems(branches []Branch, candidates map[string]Reason, merged, mergedToHead map[string]bool) []Item {
+// order. merged says which branches are contained in the base, landed which
+// have their changes there instead, and mergedToHead which are contained in
+// HEAD; between them they settle how a branch is deleted and whether deleting
+// it can lose anything.
+func branchItems(branches []Branch, candidates map[string]Reason, merged, landed, mergedToHead map[string]bool) []Item {
 	byName := make(map[string]Branch, len(branches))
 	for _, branch := range branches {
 		byName[branch.Name] = branch
@@ -281,7 +296,7 @@ func branchItems(branches []Branch, candidates map[string]Reason, merged, merged
 	items := make([]Item, 0, len(names))
 	for _, name := range names {
 		branch := byName[name]
-		inBase := merged[name]
+		inBase := merged[name] || landed[name]
 		items = append(items, Item{
 			Kind:   BranchKind,
 			Key:    name,

@@ -31,6 +31,7 @@ type Reason string
 
 const (
 	Merged   Reason = "merged"
+	Squashed Reason = "squash-merged"
 	Gone     Reason = "upstream gone"
 	Unused   Reason = "unused"
 	Detached Reason = "detached"
@@ -90,6 +91,10 @@ type State struct {
 	// A detached worktree whose HEAD is not carries commits that removing it
 	// would orphan.
 	InBase bool
+	// Landed says that, though the HEAD is not in the base, its changes are:
+	// merging it would change nothing. Removing the worktree then orphans
+	// commits, but no work.
+	Landed bool
 }
 
 // Item is one deletion candidate, ready to display, select, and act on.
@@ -107,7 +112,8 @@ type Item struct {
 	Force bool
 	// Risky says the commits here are in neither the base nor any remote, so
 	// deleting really does drop them. Merged branches are never risky, however
-	// much their own remote branch has fallen behind.
+	// much their own remote branch has fallen behind, and neither are
+	// squash-merged ones: their commits go, but nothing that was in them does.
 	Risky bool
 }
 

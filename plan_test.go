@@ -28,6 +28,7 @@ func TestClassifyBranches(t *testing.T) {
 		name     string
 		branches []Branch
 		merged   map[string]bool
+		landed   map[string]bool
 		want     map[string]Reason
 	}{
 		{
@@ -35,6 +36,24 @@ func TestClassifyBranches(t *testing.T) {
 			branches: []Branch{branch("done", 100, "")},
 			merged:   set("done"),
 			want:     map[string]Reason{"done": Merged},
+		},
+		{
+			name:     "a recent branch whose changes landed qualifies as squash-merged",
+			branches: []Branch{branch("squashed", 100, "")},
+			landed:   set("squashed"),
+			want:     map[string]Reason{"squashed": Squashed},
+		},
+		{
+			name:     "gone wins over squash-merged",
+			branches: []Branch{branch("squashed", 100, "[gone]")},
+			landed:   set("squashed"),
+			want:     map[string]Reason{"squashed": Gone},
+		},
+		{
+			name:     "squash-merged wins over unused",
+			branches: []Branch{branch("old", 10, "")},
+			landed:   set("old"),
+			want:     map[string]Reason{"old": Squashed},
 		},
 		{
 			name:     "gone upstream qualifies without being merged",
@@ -73,7 +92,7 @@ func TestClassifyBranches(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := classifyBranches(test.branches, test.merged, nil, staleBefore)
+			got := classifyBranches(test.branches, test.merged, test.landed, nil, staleBefore)
 			if !reflect.DeepEqual(got, test.want) {
 				t.Errorf("classifyBranches = %v, want %v", got, test.want)
 			}
@@ -82,7 +101,7 @@ func TestClassifyBranches(t *testing.T) {
 
 	t.Run("protected branches are left alone", func(t *testing.T) {
 		protected := map[string]string{"main": "the base"}
-		got := classifyBranches([]Branch{branch("main", 10, "[gone]")}, nil, protected, staleBefore)
+		got := classifyBranches([]Branch{branch("main", 10, "[gone]")}, nil, nil, protected, staleBefore)
 		if len(got) != 0 {
 			t.Errorf("classifyBranches = %v, want empty", got)
 		}
@@ -92,13 +111,13 @@ func TestClassifyBranches(t *testing.T) {
 	// explanation, and a protected one names which protection applied.
 	t.Run("branches that are passed over say why", func(t *testing.T) {
 		protected := map[string]string{"main": "the base"}
-		if _, why := classify(branch("main", 10, "[gone]"), nil, protected, staleBefore); why != "protected: the base" {
+		if _, why := classify(branch("main", 10, "[gone]"), nil, nil, protected, staleBefore); why != "protected: the base" {
 			t.Errorf("classify(main) = %q, want the protection reason", why)
 		}
-		if _, why := classify(branch("active", 100, ""), nil, nil, staleBefore); !strings.Contains(why, "not merged") {
+		if _, why := classify(branch("active", 100, ""), nil, nil, nil, staleBefore); !strings.Contains(why, "not merged") {
 			t.Errorf("classify(active) = %q, want a reason mentioning the merge", why)
 		}
-		if reason, why := classify(branch("done", 100, ""), set("done"), nil, staleBefore); reason != Merged || why != "" {
+		if reason, why := classify(branch("done", 100, ""), set("done"), nil, nil, staleBefore); reason != Merged || why != "" {
 			t.Errorf("classify(done) = %q/%q, want merged and no explanation", reason, why)
 		}
 	})
@@ -209,6 +228,16 @@ func TestPlanWorktrees(t *testing.T) {
 		)
 		if len(items) != 1 || !items[0].Risky || items[0].State != "only here" {
 			t.Errorf("items = %+v, want a risky item", items)
+		}
+	})
+
+	t.Run("detached worktree whose changes landed is not risky", func(t *testing.T) {
+		// Its commits are orphaned by the removal, but nothing they changed is.
+		landed := outsideBase(state(true, false, 10))
+		landed.Landed = true
+		items, _ := plan(Worktree{"/wt", "0123456789abcdef", "", false}, landed, nil, "/repo")
+		if len(items) != 1 || items[0].Risky || items[0].State != "clean" {
+			t.Errorf("items = %+v, want a clean item", items)
 		}
 	})
 
@@ -427,10 +456,29 @@ func TestBranchItems(t *testing.T) {
 			{"zeta", 100, "2 days ago", "later work", "origin/zeta", "[gone]"},
 			{"alpha", 100, "3 weeks ago", "early work", "", ""},
 		}
-		items := branchItems(branches, map[string]Reason{"zeta": Gone, "alpha": Merged}, set("alpha"), set("alpha"))
+		items := branchItems(branches, map[string]Reason{"zeta": Gone, "alpha": Merged}, set("alpha"), nil, set("alpha"))
 		want := []Item{
 			{BranchKind, "alpha", Merged, "3 weeks ago", "no upstream", "early work", false, false},
 			{BranchKind, "zeta", Gone, "2 days ago", "only here", "later work", true, true},
+		}
+		if !reflect.DeepEqual(items, want) {
+			t.Errorf("branchItems = %+v, want %+v", items, want)
+		}
+	})
+
+	// The classic squash-merged pull request: the remote branch was deleted on
+	// merge and the local commits are nowhere else, but every change they made
+	// is in the base. That is safe to delete, and must not read "only here".
+	t.Run("a squash-merged branch is not only here", func(t *testing.T) {
+		branches := []Branch{
+			{"pr", 100, "2 days ago", "the work", "origin/pr", "[gone]"},
+			{"local", 100, "2 days ago", "more work", "", ""},
+		}
+		candidates := map[string]Reason{"pr": Gone, "local": Squashed}
+		items := branchItems(branches, candidates, nil, set("pr", "local"), nil)
+		want := []Item{
+			{BranchKind, "local", Squashed, "2 days ago", "no upstream", "more work", true, false},
+			{BranchKind, "pr", Gone, "2 days ago", "upstream gone", "the work", true, false},
 		}
 		if !reflect.DeepEqual(items, want) {
 			t.Errorf("branchItems = %+v, want %+v", items, want)
@@ -443,7 +491,7 @@ func TestBranchItems(t *testing.T) {
 			subject += "x"
 		}
 		branches := []Branch{{"b", 100, "now", subject, "", ""}}
-		item := branchItems(branches, map[string]Reason{"b": Merged}, set("b"), set("b"))[0]
+		item := branchItems(branches, map[string]Reason{"b": Merged}, set("b"), nil, set("b"))[0]
 		if runes := []rune(item.Detail); len(runes) != subjectWidth || runes[len(runes)-1] != '…' {
 			t.Errorf("Detail = %q", item.Detail)
 		}
