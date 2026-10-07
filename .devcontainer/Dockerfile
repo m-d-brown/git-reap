@@ -5,19 +5,23 @@ FROM mcr.microsoft.com/devcontainers/base:bookworm
 
 # What scripts/screenshot.sh shells out to, and cannot install for itself:
 #
-#   fzf            the picker being photographed, so the screenshot is the real
-#                  thing rather than a mockup
 #   librsvg2-bin   rsvg-convert, which turns capture.py's SVG into the PNG
 #   fonts-dejavu-core  a monospace font for rsvg-convert to draw with. The SVG
 #                  names a list of families and DejaVu Sans Mono is the entry a
 #                  Debian box can satisfy; with none of them installed the text
 #                  falls back to a proportional face and the columns wander.
 #
-# Taking these from apt rather than a rolling installer is deliberate: the
-# screenshot should not change because fzf shipped a new release.
+# Both come from apt because neither is in mise's registry, and neither needs
+# pinning more finely than this: one rasterises an SVG, the other is a font held
+# still by its own package. Nothing either of them does shows up as a glyph.
+#
+# fzf is deliberately not here. It is the one tool whose version is visible in
+# the picture -- the cursor and the marker are drawn differently from release to
+# release -- so mise.toml pins it, where a bump is a one-line diff rather than a
+# base-image change. Installing the distro's fzf alongside would only give a
+# misconfigured run something stale to fall back to, quietly.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        fzf \
         librsvg2-bin \
         fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*

@@ -34,9 +34,12 @@ current UTC day rather than the current second, so a redraw with nothing behind
 it produces identical bytes and leaves `git status` empty. If `docs/` comes back
 modified, the picture genuinely changed.
 
-Redraw **in the devcontainer**. It pins `fzf` to the version Debian stable
-ships; a newer `fzf` draws its cursor and marker with different glyphs, which
-lands in the diff as a visual change having nothing to do with your work.
+Redraw **with the `fzf` that `mise.toml` pins** — the devcontainer installs it,
+and `scripts/screenshot.sh` resolves it through mise rather than trusting
+`PATH`. fzf draws its cursor and marker with different glyphs from release to
+release, so a redraw on a different version lands in the diff as a visual change
+having nothing to do with your work. Do not route around that by putting another
+fzf first on `PATH`; bump the pin instead, in its own commit, with the redraw.
 
 ## The README quotes real output
 

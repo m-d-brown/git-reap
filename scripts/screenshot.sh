@@ -7,11 +7,21 @@
 #
 #   usage: scripts/screenshot.sh
 #
-# Needs go, git, fzf, rsvg-convert (brew install librsvg / apt install
-# librsvg2-bin), and python3 with pyte (pip install pyte).
+# Needs go, git, mise (which supplies fzf), rsvg-convert (brew install librsvg /
+# apt install librsvg2-bin), and python3 with pyte (pip install pyte).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+# fzf comes from mise.toml, and has to be put on PATH here rather than left to a
+# shim. git-reap looks fzf up for itself, and it does that from inside the demo
+# repository under /tmp -- where no mise configuration applies, so a shim
+# resolved from there falls through to whatever fzf the machine happens to have,
+# and the picture is drawn by a version nobody chose. Resolving once, from the
+# repository root, is what makes the pinned version the version on screen.
+command -v mise > /dev/null || { echo "screenshot: mise is not installed (https://mise.jdx.dev)" >&2; exit 1; }
+fzf=$(mise which fzf) || { echo "screenshot: no fzf for the version mise.toml pins; run 'mise install'" >&2; exit 1; }
+export PATH="$(dirname "$fzf"):$PATH"
 
 for tool in go git fzf rsvg-convert python3; do
   command -v "$tool" > /dev/null || { echo "screenshot: $tool is not installed" >&2; exit 1; }

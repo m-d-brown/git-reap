@@ -282,8 +282,9 @@ make screenshot
 builds the binary, builds a demo repository with something of each kind left
 lying around in it (`scripts/demo-repo.sh`), and runs the real picker against
 that in a pty twice, drawing each screen it left behind (`scripts/capture.py`)
-into `docs/screenshot.png` and `docs/screenshot-warning.png`. Needs `fzf`,
-`rsvg-convert`, and `python3` with [pyte](https://pypi.org/project/pyte/).
+into `docs/screenshot.png` and `docs/screenshot-warning.png`. Needs
+[mise](https://mise.jdx.dev), which supplies `fzf`, plus `rsvg-convert` and
+`python3` with [pyte](https://pypi.org/project/pyte/).
 
 Redraw them in the same commit as anything that changes what the picker puts on
 screen — a column, a reason, a preview line, or the demo repository itself.
@@ -302,10 +303,13 @@ idle branches at all. The hashes do move when the day rolls over, because they
 hash those dates.
 
 Rather than installing the tools, open the repository in a Dev Containers-capable
-editor and let `.devcontainer/` supply them. It pins them to what Debian
-stable ships, so the picture does not drift when `fzf` cuts a release, and it
-installs a monospace font for `rsvg-convert` to draw with — without one the
-text falls back to a proportional face and the columns wander.
+editor and let `.devcontainer/` supply them. `fzf` is pinned in `mise.toml`
+rather than taken from the base image, because it is the one tool whose version
+is visible in the picture — the cursor and the marker are drawn differently from
+release to release — so moving it is a one-line diff and a redraw, reviewable
+like anything else. The container also installs a monospace font for
+`rsvg-convert` to draw with; without one the text falls back to a proportional
+face and the columns wander.
 
 ## License
 

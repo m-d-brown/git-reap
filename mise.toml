@@ -1,0 +1,15 @@
+# The one tool whose version shows up in docs/*.png. fzf draws the cursor and
+# the marker, and which glyphs it uses has changed across releases, so a redraw
+# on a different fzf lands in the diff as a visual change nobody made. Pinning
+# it here rather than taking whatever the base image ships keeps that decision
+# in one line, visible in review, and bumpable without rebuilding the container.
+#
+# scripts/screenshot.sh puts this on PATH itself rather than relying on a shim:
+# git-reap looks fzf up from inside the demo repository under /tmp, where no
+# mise configuration applies, and a shim resolved from there falls through to
+# whatever fzf the machine happens to have.
+#
+# Go is deliberately absent. go.mod owns that version, and .devcontainer/post-
+# create.sh hands it to mise from there rather than restating it.
+[tools]
+fzf = "0.74.4"
